@@ -22,6 +22,7 @@ import com.dada.eventmanagement.event.entity.Event;
 import com.dada.eventmanagement.event.repository.EventRepository;
 import com.dada.eventmanagement.payment.repository.ReservationPaymentRepository;
 import com.dada.eventmanagement.reservation.repository.ReservationRepository;
+import com.dada.eventmanagement.staff.service.StaffService;
 import java.math.BigDecimal;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -40,14 +41,16 @@ public class EventService {
     private final EventCostRepository eventCostRepository;
     private final EventConsumptionPlanRepository consumptionPlanRepository;
     private final CostCategoryRepository costCategoryRepository;
+    private final StaffService staffService;
 
-    public EventService(EventRepository eventRepository, ReservationRepository reservationRepository, ReservationPaymentRepository paymentRepository, EventCostRepository eventCostRepository, EventConsumptionPlanRepository consumptionPlanRepository, CostCategoryRepository costCategoryRepository) {
+    public EventService(EventRepository eventRepository, ReservationRepository reservationRepository, ReservationPaymentRepository paymentRepository, EventCostRepository eventCostRepository, EventConsumptionPlanRepository consumptionPlanRepository, CostCategoryRepository costCategoryRepository, StaffService staffService) {
         this.eventRepository = eventRepository;
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
         this.eventCostRepository = eventCostRepository;
         this.consumptionPlanRepository = consumptionPlanRepository;
         this.costCategoryRepository = costCategoryRepository;
+        this.staffService = staffService;
     }
 
     public List<EventResponse> list() {
@@ -82,6 +85,9 @@ public class EventService {
     public EventResponse updateStatus(Long id, EventStatus status) {
         Event event = findEvent(id);
         event.setStatus(status);
+        if (status == EventStatus.CANCELLED) {
+            cancelReservationsByEvent(event.getCompanyId(), event.getId());
+        }
         return toResponse(eventRepository.save(event));
     }
 
@@ -112,6 +118,24 @@ public class EventService {
     }
 
     @Transactional
+    public EventResponse finalizePricing(Long id) {
+        Event event = findEvent(id);
+        validatePricingAllowed(event);
+        if (event.getRevenueModel() != EventRevenueModel.CLOSED_ORGANIZATION) {
+            throw new BadRequestException("Ticketed and hybrid events require a final ticket price");
+        }
+        if (event.getAgreedRevenue() == null || event.getAgreedRevenue().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("Closed organizations require an agreed revenue amount");
+        }
+        BigDecimal totalCost = MathUtils.money(eventCostRepository.sumEstimatedCostByEvent(event.getCompanyId(), id));
+        event.setTargetRevenueAmount(MathUtils.money(event.getAgreedRevenue()));
+        event.setTargetProfitAmount(MathUtils.money(event.getAgreedRevenue().subtract(totalCost)));
+        event.setPricingFinalized(true);
+        event.setStatus(EventStatus.ON_SALE);
+        return toResponse(eventRepository.save(event));
+    }
+
+    @Transactional
     public void markCostsDirty(Long eventId) {
         Event event = findEvent(eventId);
         event.setCostFinalized(false);
@@ -134,6 +158,9 @@ public class EventService {
     }
 
     public void validatePricingAllowed(Event event) {
+        if (staffService.eventAssignmentCount(event.getId()) <= 0) {
+            throw new BadRequestException("At least one employee must be assigned before pricing");
+        }
         if (!Boolean.TRUE.equals(event.getConsumptionFinalized()) || !Boolean.TRUE.equals(event.getCostFinalized())) {
             throw new BadRequestException("Nihai fiyat için önce tüketim planını ve maliyetleri finalize edin");
         }
@@ -148,6 +175,7 @@ public class EventService {
     @Transactional
     public void delete(Long id) {
         Event event = findEvent(id);
+        cancelReservationsByEvent(event.getCompanyId(), event.getId());
         event.setIsDeleted(true);
         eventRepository.save(event);
     }
@@ -169,6 +197,9 @@ public class EventService {
         BigDecimal estimatedProfit = MathUtils.money(estimatedTicketRevenue.subtract(estimatedTotalCost));
         BigDecimal estimatedProfitMargin = MathUtils.percentage(estimatedProfit, estimatedTicketRevenue);
         BigDecimal totalConsumptionPlanCost = MathUtils.money(consumptionPlanRepository.sumByEvent(companyId, eventId));
+        int teamAssignedCount = staffService.eventAssignmentCount(eventId);
+        boolean teamConfigured = teamAssignedCount > 0;
+        StaffService.TeamBreakdown teamBreakdown = staffService.eventTeamBreakdown(eventId);
 
         List<EventCost> costs = eventCostRepository.findByCompanyIdAndEventIdOrderByCreatedAtDesc(companyId, eventId);
         Map<Long, String> categoryNameMap = costCategoryRepository.findByCompanyIdAndIsActiveTrueOrderByNameAsc(companyId).stream()
@@ -194,9 +225,14 @@ public class EventService {
                 event.getExpectedGuestCount(),
                 MathUtils.money(event.getFinalTicketPrice()),
                 MathUtils.money(event.getSuggestedTicketPrice()),
+                teamConfigured,
+                teamAssignedCount,
+                teamBreakdown.fixedCount(),
+                teamBreakdown.extraCount(),
                 event.getCostFinalized(),
                 event.getConsumptionFinalized(),
                 event.getPricingFinalized(),
+                setupCompletionRate(event, teamConfigured),
                 reservationReady(event),
                 totalReservationCount,
                 activeReservationCount,
@@ -233,7 +269,7 @@ public class EventService {
         event.setPrimaryContactId(request.primaryContactId());
         event.setAgreedRevenue(MathUtils.money(request.agreedRevenue()));
         event.setTicketPrice(null);
-        event.setTargetTicketCount(request.expectedGuestCount());
+        event.setTargetTicketCount(request.targetTicketCount() == null ? request.expectedGuestCount() : request.targetTicketCount());
         event.setComplimentaryGuestCount(request.complimentaryGuestCount() == null ? 0 : request.complimentaryGuestCount());
         event.setSponsorRevenueTarget(MathUtils.money(request.sponsorRevenueTarget()));
         event.setTargetRevenueAmount(resolveTargetRevenue(request));
@@ -271,11 +307,17 @@ public class EventService {
     }
 
     private boolean reservationReady(Event event) {
-        return Boolean.TRUE.equals(event.getCostFinalized())
+        boolean workflowReady = staffService.eventAssignmentCount(event.getId()) > 0
+                && Boolean.TRUE.equals(event.getCostFinalized())
                 && Boolean.TRUE.equals(event.getConsumptionFinalized())
-                && Boolean.TRUE.equals(event.getPricingFinalized())
-                && event.getFinalTicketPrice() != null
-                && event.getFinalTicketPrice().compareTo(BigDecimal.ZERO) > 0;
+                && Boolean.TRUE.equals(event.getPricingFinalized());
+        if (!workflowReady) {
+            return false;
+        }
+        if (event.getRevenueModel() == EventRevenueModel.CLOSED_ORGANIZATION) {
+            return event.getAgreedRevenue() != null && event.getAgreedRevenue().compareTo(BigDecimal.ZERO) > 0;
+        }
+        return event.getFinalTicketPrice() != null && event.getFinalTicketPrice().compareTo(BigDecimal.ZERO) > 0;
     }
 
     private void syncConsumptionCosts(Event event) {
@@ -315,6 +357,8 @@ public class EventService {
     }
 
     private EventResponse toResponse(Event event) {
+        int teamAssignedCount = staffService.eventAssignmentCount(event.getId());
+        boolean teamConfigured = teamAssignedCount > 0;
         return new EventResponse(
                 event.getId(),
                 event.getTitle(),
@@ -340,11 +384,36 @@ public class EventService {
                 event.getDepositRequired(),
                 MathUtils.money(event.getMinimumDepositAmount()),
                 event.getStatus(),
+                teamConfigured,
+                teamAssignedCount,
                 event.getCostFinalized(),
                 event.getConsumptionFinalized(),
                 event.getPricingFinalized(),
+                setupCompletionRate(event, teamConfigured),
                 reservationReady(event),
                 event.getCreatedAt()
         );
+    }
+
+    private int setupCompletionRate(Event event, boolean teamConfigured) {
+        int completed = 0;
+        if (teamConfigured) {
+            completed++;
+        }
+        if (Boolean.TRUE.equals(event.getCostFinalized())) {
+            completed++;
+        }
+        if (Boolean.TRUE.equals(event.getConsumptionFinalized())) {
+            completed++;
+        }
+        if (Boolean.TRUE.equals(event.getPricingFinalized())) {
+            completed++;
+        }
+        return completed * 25;
+    }
+
+    private void cancelReservationsByEvent(Long companyId, Long eventId) {
+        reservationRepository.findByCompanyIdAndEventIdOrderByCreatedAtDesc(companyId, eventId)
+                .forEach(reservation -> reservation.setReservationStatus(ReservationStatus.CANCELLED));
     }
 }

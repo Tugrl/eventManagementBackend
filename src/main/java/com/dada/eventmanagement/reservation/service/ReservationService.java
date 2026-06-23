@@ -1,11 +1,16 @@
 package com.dada.eventmanagement.reservation.service;
 
 import com.dada.eventmanagement.common.enums.DepositStatus;
+import com.dada.eventmanagement.common.enums.EventRevenueModel;
+import com.dada.eventmanagement.common.enums.EventStatus;
+import com.dada.eventmanagement.common.enums.ReservationChannel;
 import com.dada.eventmanagement.common.enums.ReservationStatus;
+import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
 import com.dada.eventmanagement.common.util.SecurityUtils;
 import com.dada.eventmanagement.event.entity.Event;
+import com.dada.eventmanagement.event.repository.EventRepository;
 import com.dada.eventmanagement.event.service.EventService;
 import com.dada.eventmanagement.payment.repository.ReservationPaymentRepository;
 import com.dada.eventmanagement.reservation.dto.ReservationResponse;
@@ -23,23 +28,25 @@ import org.springframework.transaction.annotation.Transactional;
 public class ReservationService {
     private final ReservationRepository reservationRepository;
     private final EventService eventService;
+    private final EventRepository eventRepository;
     private final ReservationPaymentRepository paymentRepository;
 
-    public ReservationService(ReservationRepository reservationRepository, EventService eventService, ReservationPaymentRepository paymentRepository) {
+    public ReservationService(ReservationRepository reservationRepository, EventService eventService, EventRepository eventRepository, ReservationPaymentRepository paymentRepository) {
         this.reservationRepository = reservationRepository;
         this.eventService = eventService;
+        this.eventRepository = eventRepository;
         this.paymentRepository = paymentRepository;
     }
 
     public List<ReservationResponse> listByEvent(Long eventId) {
         Event event = eventService.findEvent(eventId);
-        return reservationRepository.findByCompanyIdAndEventIdOrderByCreatedAtDesc(event.getCompanyId(), eventId)
+        return reservationRepository.findByCompanyIdAndEventIdAndReservationStatusOrderByCreatedAtDesc(event.getCompanyId(), eventId, ReservationStatus.ACTIVE)
                 .stream().map(this::toResponse).toList();
     }
 
     public List<ReservationResponse> listAll() {
         Long companyId = SecurityUtils.currentCompanyId();
-        return reservationRepository.findByCompanyIdOrderByCreatedAtDesc(companyId)
+        return reservationRepository.findByCompanyIdAndReservationStatusOrderByCreatedAtDesc(companyId, ReservationStatus.ACTIVE)
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -52,13 +59,13 @@ public class ReservationService {
     @Transactional
     public ReservationResponse create(Long eventId, ReservationUpsertRequest request) {
         Event event = eventService.findEvent(eventId);
-        eventService.validateReservationReady(event);
+        validateReservationAllowed(event);
         Reservation reservation = new Reservation();
         reservation.setCompanyId(event.getCompanyId());
         reservation.setEventId(eventId);
-        apply(reservation, request);
+        apply(reservation, request, event);
         reservation.setReservationCode(generateCode(event.getCompanyId()));
-        reservation.setDepositStatus(DepositStatus.PENDING);
+        reservation.setDepositStatus(resolveInitialDepositStatus(event, reservation.getDepositAmount()));
         reservation.setReservationStatus(ReservationStatus.ACTIVE);
         return toResponse(reservationRepository.save(reservation));
     }
@@ -66,7 +73,7 @@ public class ReservationService {
     @Transactional
     public ReservationResponse update(Long id, ReservationUpsertRequest request) {
         Reservation reservation = find(id);
-        apply(reservation, request);
+        apply(reservation, request, eventService.findEvent(reservation.getEventId()));
         return toResponse(reservationRepository.save(reservation));
     }
 
@@ -97,14 +104,42 @@ public class ReservationService {
                 .orElseThrow(() -> new ResourceNotFoundException("Reservation not found"));
     }
 
-    private void apply(Reservation reservation, ReservationUpsertRequest request) {
+    private void apply(Reservation reservation, ReservationUpsertRequest request, Event event) {
         reservation.setCustomerName(request.customerName().trim());
         reservation.setCustomerPhone(request.customerPhone().trim());
         reservation.setCustomerEmail(request.customerEmail());
         reservation.setGuestCount(request.guestCount());
+        reservation.setReservationChannel(request.reservationChannel() == null ? ReservationChannel.PHONE : request.reservationChannel());
         reservation.setTableNumber(request.tableNumber());
-        reservation.setDepositAmount(MathUtils.money(request.depositAmount()));
+        reservation.setDepositAmount(resolveDepositAmount(event, request.guestCount(), request.depositAmount()));
         reservation.setNotes(request.notes());
+    }
+
+    private BigDecimal resolveDepositAmount(Event event, Integer guestCount, BigDecimal requestedDepositAmount) {
+        if (event.getRevenueModel() == EventRevenueModel.CLOSED_ORGANIZATION || Boolean.FALSE.equals(event.getDepositRequired())) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal minimumDeposit = MathUtils.money(event.getMinimumDepositAmount());
+        if (minimumDeposit.compareTo(BigDecimal.ZERO) > 0) {
+            return MathUtils.money(minimumDeposit.multiply(BigDecimal.valueOf(guestCount)));
+        }
+        return MathUtils.money(requestedDepositAmount);
+    }
+
+    private DepositStatus resolveInitialDepositStatus(Event event, BigDecimal depositAmount) {
+        if (event.getRevenueModel() == EventRevenueModel.CLOSED_ORGANIZATION) {
+            return DepositStatus.PAID;
+        }
+        if (Boolean.FALSE.equals(event.getDepositRequired()) || MathUtils.money(depositAmount).compareTo(BigDecimal.ZERO) <= 0) {
+            return DepositStatus.PAID;
+        }
+        return DepositStatus.PENDING;
+    }
+
+    private void validateReservationAllowed(Event event) {
+        if (event.getStatus() == EventStatus.CANCELLED || event.getStatus() == EventStatus.COMPLETED) {
+            throw new BadRequestException("Iptal veya tamamlanan etkinliklerde yeni rezervasyon alinmaz");
+        }
     }
 
     private String generateCode(Long companyId) {
@@ -115,21 +150,22 @@ public class ReservationService {
     }
 
     private ReservationResponse toResponse(Reservation r) {
-        Event event = eventService.findEvent(r.getEventId());
-        BigDecimal finalTicketPrice = MathUtils.money(event.getFinalTicketPrice());
+        Event event = resolveEvent(r);
+        BigDecimal finalTicketPrice = event == null ? BigDecimal.ZERO : MathUtils.money(event.getFinalTicketPrice());
         BigDecimal totalTicketAmount = MathUtils.money(finalTicketPrice.multiply(BigDecimal.valueOf(r.getGuestCount())));
         BigDecimal paidAmount = MathUtils.money(paymentRepository.sumByCompanyAndReservationId(r.getCompanyId(), r.getId()));
         BigDecimal remainingAmount = MathUtils.money(totalTicketAmount.subtract(paidAmount).max(BigDecimal.ZERO));
         return new ReservationResponse(
                 r.getId(),
                 r.getEventId(),
-                event.getTitle(),
-                event.getEventDate(),
+                event == null ? "Arsivlenmis / silinmis etkinlik" : event.getTitle(),
+                event == null ? null : event.getEventDate(),
                 r.getReservationCode(),
                 r.getCustomerName(),
                 r.getCustomerPhone(),
                 r.getCustomerEmail(),
                 r.getGuestCount(),
+                r.getReservationChannel(),
                 r.getTableNumber(),
                 MathUtils.money(r.getDepositAmount()),
                 finalTicketPrice,
@@ -141,5 +177,9 @@ public class ReservationService {
                 r.getNotes(),
                 r.getCreatedAt()
         );
+    }
+
+    private Event resolveEvent(Reservation reservation) {
+        return eventRepository.findByIdAndCompanyId(reservation.getEventId(), reservation.getCompanyId()).orElse(null);
     }
 }

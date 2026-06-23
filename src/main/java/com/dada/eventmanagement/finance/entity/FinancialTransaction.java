@@ -2,6 +2,8 @@ package com.dada.eventmanagement.finance.entity;
 
 import com.dada.eventmanagement.common.enums.FinancialTransactionStatus;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationContext;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -37,6 +39,13 @@ public class FinancialTransaction {
     private Integer guestCount;
     @Column(columnDefinition = "TEXT")
     private String description;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private OperationSource operationSource = OperationSource.MANUAL;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private OperationContext operationContext = OperationContext.COMPANY;
+    private Long referenceId;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private FinancialTransactionStatus status = FinancialTransactionStatus.ACTIVE;

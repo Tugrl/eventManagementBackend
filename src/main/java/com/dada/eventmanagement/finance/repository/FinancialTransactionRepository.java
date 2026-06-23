@@ -2,6 +2,7 @@ package com.dada.eventmanagement.finance.repository;
 
 import com.dada.eventmanagement.common.enums.FinancialTransactionStatus;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.finance.entity.FinancialTransaction;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -19,6 +20,39 @@ public interface FinancialTransactionRepository extends JpaRepository<FinancialT
     );
 
     Optional<FinancialTransaction> findByIdAndCompanyId(Long id, Long companyId);
+    List<FinancialTransaction> findByCompanyIdAndIdIn(Long companyId, List<Long> ids);
+    Optional<FinancialTransaction> findFirstByCompanyIdAndOperationSourceAndReferenceIdAndStatus(
+            Long companyId,
+            OperationSource operationSource,
+            Long referenceId,
+            FinancialTransactionStatus status
+    );
+
+    @Query("""
+            select t from FinancialTransaction t
+            where t.companyId = :companyId
+              and t.transactionDate between :startDate and :endDate
+              and (:transactionType is null or t.transactionType = :transactionType)
+              and (:accountId is null or t.accountId = :accountId)
+              and (:categoryId is null or t.categoryId = :categoryId)
+              and (:eventId is null or t.eventId = :eventId)
+              and (:contactId is null or t.contactId = :contactId)
+              and (:operationSource is null or t.operationSource = :operationSource)
+              and (:status is null or t.status = :status)
+            order by t.transactionDate desc, t.id desc
+            """)
+    List<FinancialTransaction> search(
+            Long companyId,
+            LocalDate startDate,
+            LocalDate endDate,
+            FinancialTransactionType transactionType,
+            Long accountId,
+            Long categoryId,
+            Long eventId,
+            Long contactId,
+            OperationSource operationSource,
+            FinancialTransactionStatus status
+    );
 
     List<FinancialTransaction> findByCompanyIdAndEventIdAndTransactionTypeAndStatusOrderByTransactionDateDescIdDesc(
             Long companyId,

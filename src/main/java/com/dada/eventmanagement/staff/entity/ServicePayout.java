@@ -1,5 +1,8 @@
 package com.dada.eventmanagement.staff.entity;
 
+import com.dada.eventmanagement.common.enums.CostPaymentStatus;
+import com.dada.eventmanagement.common.enums.ServicePayoutClosingStatus;
+import com.dada.eventmanagement.common.enums.ServicePayoutSource;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -20,6 +23,15 @@ public class ServicePayout {
     @Column(nullable = false)
     private LocalDate payoutDate;
     private Long eventId;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ServicePayoutSource payoutSource = ServicePayoutSource.MANUAL;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ServicePayoutClosingStatus closingStatus = ServicePayoutClosingStatus.FINALIZED;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private CostPaymentStatus paymentStatus = CostPaymentStatus.UNPAID;
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal totalServiceAmount = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
@@ -29,6 +41,10 @@ public class ServicePayout {
     @Column(columnDefinition = "TEXT")
     private String notes;
     private Long financialTransactionId;
+    private Long accountId;
+    private Long paymentMethodId;
+    private Long categoryId;
+    private LocalDate paymentDate;
     private Long createdByUserId;
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;

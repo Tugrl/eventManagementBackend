@@ -32,9 +32,12 @@ public record EventResponse(
         Boolean depositRequired,
         BigDecimal minimumDepositAmount,
         EventStatus status,
+        Boolean teamConfigured,
+        Integer teamAssignedCount,
         Boolean costFinalized,
         Boolean consumptionFinalized,
         Boolean pricingFinalized,
+        Integer setupCompletionRate,
         Boolean reservationReady,
         LocalDateTime createdAt
 ) {

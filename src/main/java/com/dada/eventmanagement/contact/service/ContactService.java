@@ -3,6 +3,8 @@ package com.dada.eventmanagement.contact.service;
 import com.dada.eventmanagement.common.enums.ContactType;
 import com.dada.eventmanagement.common.enums.ContactMovementType;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationContext;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.SecurityUtils;
@@ -109,7 +111,10 @@ public class ContactService {
                     request.movementDate(),
                     request.amount(),
                     null,
-                    request.description()
+                    request.description(),
+                    request.movementType() == ContactMovementType.COLLECTION ? OperationSource.CONTACT_COLLECTION : OperationSource.CONTACT_PAYMENT,
+                    OperationContext.CONTACT,
+                    contact.getId()
             ));
             financialTransactionId = tx.getId();
         }

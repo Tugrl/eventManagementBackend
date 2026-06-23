@@ -55,6 +55,11 @@ public class EventController {
         return ApiResponse.ok("Event consumption finalized", eventService.finalizeConsumption(id));
     }
 
+    @PatchMapping("/{id}/finalize-pricing")
+    public ApiResponse<?> finalizePricing(@PathVariable Long id) {
+        return ApiResponse.ok("Event pricing finalized", eventService.finalizePricing(id));
+    }
+
     @DeleteMapping("/{id}")
     public ApiResponse<?> delete(@PathVariable Long id) {
         eventService.delete(id);

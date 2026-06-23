@@ -1,6 +1,11 @@
 package com.dada.eventmanagement.finance.controller;
 
 import com.dada.eventmanagement.common.enums.FinancialCategoryType;
+import com.dada.eventmanagement.common.enums.FinanceDocumentStatus;
+import com.dada.eventmanagement.common.enums.FinanceDocumentType;
+import com.dada.eventmanagement.common.enums.FinancialTransactionStatus;
+import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.common.response.ApiResponse;
 import com.dada.eventmanagement.finance.dto.*;
 import com.dada.eventmanagement.finance.service.FinanceService;
@@ -99,9 +104,61 @@ public class FinanceController {
     @GetMapping("/transactions")
     public ApiResponse<?> transactions(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(required = false) FinancialTransactionType transactionType,
+            @RequestParam(required = false) Long accountId,
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) Long eventId,
+            @RequestParam(required = false) Long contactId,
+            @RequestParam(required = false) OperationSource operationSource,
+            @RequestParam(required = false) FinancialTransactionStatus status
+    ) {
+        return ApiResponse.ok("Financial transactions listed", service.transactions(
+                startDate, endDate, transactionType, accountId, categoryId, eventId, contactId, operationSource, status
+        ));
+    }
+
+    @GetMapping("/documents")
+    public ApiResponse<?> documents(
+            @RequestParam(required = false) FinanceDocumentType documentType,
+            @RequestParam(required = false) FinanceDocumentStatus status,
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) Long contactId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate
     ) {
-        return ApiResponse.ok("Financial transactions listed", service.transactions(startDate, endDate));
+        return ApiResponse.ok("Finance documents listed", service.documents(documentType, status, categoryId, contactId, startDate, endDate));
+    }
+
+    @GetMapping("/documents/{id}")
+    public ApiResponse<?> documentDetail(@PathVariable Long id) {
+        return ApiResponse.ok("Finance document loaded", service.documentDetail(id));
+    }
+
+    @PostMapping("/documents")
+    public ApiResponse<?> createDocument(@Valid @RequestBody FinanceDocumentRequest request) {
+        return ApiResponse.ok("Finance document created", service.createDocument(request));
+    }
+
+    @PutMapping("/documents/{id}")
+    public ApiResponse<?> updateDocument(@PathVariable Long id, @Valid @RequestBody FinanceDocumentRequest request) {
+        return ApiResponse.ok("Finance document updated", service.updateDocument(id, request));
+    }
+
+    @PostMapping("/documents/{id}/settlements")
+    public ApiResponse<?> createDocumentSettlement(@PathVariable Long id, @Valid @RequestBody FinanceDocumentSettlementRequest request) {
+        return ApiResponse.ok("Finance document settlement created", service.createDocumentSettlement(id, request));
+    }
+
+    @PostMapping("/documents/{id}/void")
+    public ApiResponse<?> voidDocument(@PathVariable Long id, @Valid @RequestBody VoidTransactionRequest request) {
+        service.voidDocument(id, request);
+        return ApiResponse.ok("Finance document voided");
+    }
+
+    @GetMapping("/dashboard-summary")
+    public ApiResponse<?> dashboardSummary() {
+        return ApiResponse.ok("Finance dashboard summary calculated", service.dashboardSummary());
     }
 
     @PostMapping("/transactions")

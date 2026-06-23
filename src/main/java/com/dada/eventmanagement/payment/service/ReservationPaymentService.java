@@ -1,9 +1,13 @@
 package com.dada.eventmanagement.payment.service;
 
 import com.dada.eventmanagement.common.enums.DepositStatus;
+import com.dada.eventmanagement.common.enums.EventRevenueModel;
 import com.dada.eventmanagement.common.enums.FinancialCategoryType;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationContext;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.common.enums.PaymentMethodType;
+import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
 import com.dada.eventmanagement.common.util.SecurityUtils;
@@ -67,6 +71,10 @@ public class ReservationPaymentService {
     @Transactional
     public ReservationPaymentResponse create(Long reservationId, ReservationPaymentRequest request) {
         Reservation reservation = findReservation(reservationId);
+        Event event = eventService.findEvent(reservation.getEventId());
+        if (event.getRevenueModel() == EventRevenueModel.CLOSED_ORGANIZATION) {
+            throw new BadRequestException("Kapali organizasyonlarda rezervasyon uzerinden kapora alinmaz. Tahsilati etkinlik gelirlerinden girin.");
+        }
         ReservationPayment payment = new ReservationPayment();
         payment.setCompanyId(reservation.getCompanyId());
         payment.setReservationId(reservationId);
@@ -76,6 +84,7 @@ public class ReservationPaymentService {
         payment.setPaymentMethod(request.paymentMethod());
         payment.setBankReference(request.bankReference());
         payment.setDescription(request.description());
+        payment = paymentRepository.save(payment);
         FinancialTransaction tx = financeService.createTransactionEntity(new FinancialTransactionRequest(
                 reservation.getEventId(),
                 null,
@@ -87,7 +96,10 @@ public class ReservationPaymentService {
                 request.paymentDate(),
                 MathUtils.money(request.amount()),
                 reservation.getGuestCount(),
-                paymentDescription(reservation, request)
+                paymentDescription(reservation, request),
+                OperationSource.RESERVATION_PAYMENT,
+                OperationContext.RESERVATION,
+                payment.getId()
         ));
         payment.setFinancialTransactionId(tx.getId());
         ReservationPayment saved = paymentRepository.save(payment);
@@ -117,13 +129,14 @@ public class ReservationPaymentService {
     private void recalculateDepositStatus(Reservation reservation) {
         BigDecimal totalPaid = MathUtils.money(paymentRepository.sumByCompanyAndReservationId(reservation.getCompanyId(), reservation.getId()));
         Event event = eventService.findEvent(reservation.getEventId());
-        if (totalPaid.compareTo(BigDecimal.ZERO) <= 0) {
-            reservation.setDepositStatus(DepositStatus.PENDING);
-        } else if (Boolean.FALSE.equals(event.getDepositRequired())) {
+        if (event.getRevenueModel() == EventRevenueModel.CLOSED_ORGANIZATION || Boolean.FALSE.equals(event.getDepositRequired())) {
             reservation.setDepositStatus(DepositStatus.PAID);
+        } else if (totalPaid.compareTo(BigDecimal.ZERO) <= 0) {
+            reservation.setDepositStatus(DepositStatus.PENDING);
         } else {
             BigDecimal minimum = MathUtils.money(event.getMinimumDepositAmount());
-            if (totalPaid.compareTo(minimum) >= 0) {
+            BigDecimal targetDeposit = MathUtils.money(reservation.getDepositAmount());
+            if (targetDeposit.compareTo(BigDecimal.ZERO) <= 0 || totalPaid.compareTo(targetDeposit) >= 0 || totalPaid.compareTo(minimum) >= 0) {
                 reservation.setDepositStatus(DepositStatus.PAID);
             } else {
                 reservation.setDepositStatus(DepositStatus.PARTIALLY_PAID);

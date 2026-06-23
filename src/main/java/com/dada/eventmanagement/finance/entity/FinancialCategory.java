@@ -2,6 +2,7 @@ package com.dada.eventmanagement.finance.entity;
 
 import com.dada.eventmanagement.common.enums.FinancialCategoryType;
 import com.dada.eventmanagement.common.enums.FinancialScope;
+import com.dada.eventmanagement.common.enums.OperationGroup;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import lombok.Getter;
@@ -26,6 +27,9 @@ public class FinancialCategory {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private FinancialScope scope;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private OperationGroup operationGroup = OperationGroup.OTHER;
     @Column(columnDefinition = "TEXT")
     private String description;
     @Column(nullable = false)

@@ -1,5 +1,6 @@
 package com.dada.eventmanagement.consumption.service;
 
+import com.dada.eventmanagement.common.enums.InventoryUnit;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
 import com.dada.eventmanagement.common.util.SecurityUtils;
@@ -84,16 +85,19 @@ public class ConsumptionPlanService {
         entity.setProductName(item.getName());
         entity.setCategory(request.category().trim());
         entity.setEstimatedConsumptionPerPerson(request.estimatedConsumptionPerPerson().setScale(4, RoundingMode.HALF_UP));
+        entity.setInputUnit(request.inputUnit());
         int expectedGuestCount = request.expectedGuestCount() == null || request.expectedGuestCount() <= 0
                 ? eventService.findEvent(entity.getEventId()).getExpectedGuestCount()
                 : request.expectedGuestCount();
         entity.setExpectedGuestCount(expectedGuestCount);
         entity.setWastePercentage(MathUtils.money(request.wastePercentage()));
         entity.setUnitCost(MathUtils.money(item.getUnitCost()));
+        BigDecimal convertedPerPerson = ConsumptionUnitConverter.convertToStockUnit(item, request.inputUnit(), entity.getEstimatedConsumptionPerPerson());
+        entity.setConvertedUnitQuantity(convertedPerPerson.setScale(4, RoundingMode.HALF_UP));
 
         BigDecimal wasteMultiplier = BigDecimal.ONE.add(entity.getWastePercentage().divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP));
         BigDecimal requiredQuantity = BigDecimal.valueOf(entity.getExpectedGuestCount())
-                .multiply(entity.getEstimatedConsumptionPerPerson())
+                .multiply(entity.getConvertedUnitQuantity())
                 .multiply(wasteMultiplier);
         entity.setRequiredQuantity(requiredQuantity.setScale(4, RoundingMode.HALF_UP));
         entity.setTotalCost(MathUtils.money(entity.getRequiredQuantity().multiply(entity.getUnitCost())));
@@ -108,13 +112,25 @@ public class ConsumptionPlanService {
                 p.getProductName(),
                 p.getCategory(),
                 p.getEstimatedConsumptionPerPerson(),
+                p.getInputUnit(),
+                resolveStockUnit(p.getInventoryItemId()),
                 p.getExpectedGuestCount(),
                 MathUtils.money(p.getWastePercentage()),
                 MathUtils.money(p.getUnitCost()),
+                p.getConvertedUnitQuantity(),
                 p.getRequiredQuantity(),
                 MathUtils.money(p.getTotalCost()),
                 p.getNotes(),
                 p.getCreatedAt()
         );
+    }
+
+    private InventoryUnit resolveStockUnit(Long inventoryItemId) {
+        if (inventoryItemId == null) {
+            return null;
+        }
+        return inventoryItemRepository.findByIdAndCompanyIdAndIsActiveTrue(inventoryItemId, SecurityUtils.currentCompanyId())
+                .map(InventoryItem::getUnit)
+                .orElse(null);
     }
 }

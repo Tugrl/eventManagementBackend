@@ -1,5 +1,6 @@
 package com.dada.eventmanagement.consumption.entity;
 
+import com.dada.eventmanagement.common.enums.InventoryUnit;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -25,12 +26,17 @@ public class EventConsumptionPlan {
     private String category;
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal estimatedConsumptionPerPerson;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private InventoryUnit inputUnit;
     @Column(nullable = false)
     private Integer expectedGuestCount;
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal wastePercentage = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal unitCost;
+    @Column(nullable = false, precision = 19, scale = 4)
+    private BigDecimal convertedUnitQuantity = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal requiredQuantity = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)

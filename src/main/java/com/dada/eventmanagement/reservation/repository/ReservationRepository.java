@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.Query;
 public interface ReservationRepository extends JpaRepository<Reservation, Long> {
     List<Reservation> findByCompanyIdOrderByCreatedAtDesc(Long companyId);
     List<Reservation> findByCompanyIdAndEventIdOrderByCreatedAtDesc(Long companyId, Long eventId);
+    List<Reservation> findByCompanyIdAndReservationStatusOrderByCreatedAtDesc(Long companyId, ReservationStatus reservationStatus);
+    List<Reservation> findByCompanyIdAndEventIdAndReservationStatusOrderByCreatedAtDesc(Long companyId, Long eventId, ReservationStatus reservationStatus);
     Optional<Reservation> findByIdAndCompanyId(Long id, Long companyId);
     long countByCompanyIdAndReservationCodeStartingWith(Long companyId, String codePrefix);
     long countByCompanyId(Long companyId);

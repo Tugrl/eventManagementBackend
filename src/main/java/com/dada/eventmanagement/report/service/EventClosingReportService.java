@@ -4,16 +4,18 @@ import com.dada.eventmanagement.common.enums.EventStatus;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
 import com.dada.eventmanagement.cost.service.EventCostService;
+import com.dada.eventmanagement.cost.service.EventCostRealizationService;
 import com.dada.eventmanagement.event.entity.Event;
 import com.dada.eventmanagement.event.repository.EventRepository;
 import com.dada.eventmanagement.event.service.EventService;
-import com.dada.eventmanagement.payment.repository.ReservationPaymentRepository;
+import com.dada.eventmanagement.finance.service.FinanceService;
 import com.dada.eventmanagement.report.dto.ClosingReportRequest;
 import com.dada.eventmanagement.report.dto.ClosingReportResponse;
 import com.dada.eventmanagement.report.entity.EventClosingReport;
 import com.dada.eventmanagement.report.repository.EventClosingReportRepository;
 import com.dada.eventmanagement.reservation.entity.Reservation;
 import com.dada.eventmanagement.reservation.repository.ReservationRepository;
+import com.dada.eventmanagement.staff.service.StaffService;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -26,21 +28,27 @@ public class EventClosingReportService {
     private final EventService eventService;
     private final EventRepository eventRepository;
     private final EventCostService eventCostService;
+    private final EventCostRealizationService realizationService;
+    private final FinanceService financeService;
     private final ReservationRepository reservationRepository;
-    private final ReservationPaymentRepository paymentRepository;
+    private final StaffService staffService;
 
-    public EventClosingReportService(EventClosingReportRepository repository, EventService eventService, EventRepository eventRepository, EventCostService eventCostService, ReservationRepository reservationRepository, ReservationPaymentRepository paymentRepository) {
+    public EventClosingReportService(EventClosingReportRepository repository, EventService eventService, EventRepository eventRepository, EventCostService eventCostService, EventCostRealizationService realizationService, FinanceService financeService, ReservationRepository reservationRepository, StaffService staffService) {
         this.repository = repository;
         this.eventService = eventService;
         this.eventRepository = eventRepository;
         this.eventCostService = eventCostService;
+        this.realizationService = realizationService;
+        this.financeService = financeService;
         this.reservationRepository = reservationRepository;
-        this.paymentRepository = paymentRepository;
+        this.staffService = staffService;
     }
 
     @Transactional
     public ClosingReportResponse create(Long eventId, ClosingReportRequest request) {
         Event event = eventService.findEvent(eventId);
+        realizationService.validateFinalized(eventId);
+        staffService.validateClosingPayoutFinalized(eventId);
         EventClosingReport report = repository.findByCompanyIdAndEventId(event.getCompanyId(), eventId).orElse(new EventClosingReport());
         report.setCompanyId(event.getCompanyId());
         report.setEventId(eventId);
@@ -61,6 +69,8 @@ public class EventClosingReportService {
     @Transactional
     public ClosingReportResponse update(Long eventId, ClosingReportRequest request) {
         Event event = eventService.findEvent(eventId);
+        realizationService.validateFinalized(eventId);
+        staffService.validateClosingPayoutFinalized(eventId);
         EventClosingReport report = repository.findByCompanyIdAndEventId(event.getCompanyId(), eventId)
                 .orElseThrow(() -> new ResourceNotFoundException("Closing report not found"));
         apply(report, request, event);
@@ -69,8 +79,7 @@ public class EventClosingReportService {
 
     private void apply(EventClosingReport report, ClosingReportRequest request, Event event) {
         ReportNumbers numbers = calculate(event);
-        BigDecimal estimatedRevenue = MathUtils.money(Optional.ofNullable(event.getFinalTicketPrice()).orElse(BigDecimal.ZERO)
-                .multiply(BigDecimal.valueOf(event.getExpectedGuestCount())));
+        BigDecimal estimatedRevenue = estimatedRevenue(event);
         BigDecimal estimatedCost = eventCostService.totalEstimatedCost(event.getId());
         BigDecimal estimatedProfit = estimatedRevenue.subtract(estimatedCost);
         BigDecimal difference = numbers.actualProfit().subtract(estimatedProfit);
@@ -125,10 +134,13 @@ public class EventClosingReportService {
                 .toList();
         int actualGuestCount = reservations.stream().mapToInt(Reservation::getGuestCount).sum();
         BigDecimal finalTicketPrice = MathUtils.money(event.getFinalTicketPrice());
-        BigDecimal grossTicketPotential = MathUtils.money(finalTicketPrice.multiply(BigDecimal.valueOf(actualGuestCount)));
-        BigDecimal collectedPaymentAmount = MathUtils.money(paymentRepository.sumByCompanyAndEventId(event.getCompanyId(), event.getId()));
+        BigDecimal grossTicketPotential = estimatedRevenue(event);
+        BigDecimal collectedPaymentAmount = MathUtils.money(financeService.eventIncomeTransactions(event.getId()).stream()
+                .map(row -> row.amount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
         BigDecimal remainingReceivableAmount = MathUtils.money(grossTicketPotential.subtract(collectedPaymentAmount).max(BigDecimal.ZERO));
-        BigDecimal actualTotalCost = eventCostService.totalEstimatedCost(event.getId());
+        BigDecimal actualTotalCost = realizationService.totalFinalizedActualCost(event.getId())
+                .add(staffService.totalFinalizedServiceCost(event.getId()));
         BigDecimal actualProfit = MathUtils.money(collectedPaymentAmount.subtract(actualTotalCost));
         return new ReportNumbers(
                 actualGuestCount,
@@ -139,6 +151,15 @@ public class EventClosingReportService {
                 actualTotalCost,
                 actualProfit
         );
+    }
+
+    private BigDecimal estimatedRevenue(Event event) {
+        BigDecimal target = MathUtils.money(event.getTargetRevenueAmount());
+        if (target.compareTo(BigDecimal.ZERO) > 0) {
+            return target;
+        }
+        return MathUtils.money(Optional.ofNullable(event.getFinalTicketPrice()).orElse(BigDecimal.ZERO)
+                .multiply(BigDecimal.valueOf(event.getExpectedGuestCount())));
     }
 
     private record ReportNumbers(

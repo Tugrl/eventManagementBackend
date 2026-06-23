@@ -2,6 +2,8 @@ package com.dada.eventmanagement.event.service;
 
 import com.dada.eventmanagement.common.enums.ContactMovementType;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationContext;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.contact.dto.ContactMovementRequest;
 import com.dada.eventmanagement.contact.service.ContactService;
 import com.dada.eventmanagement.event.dto.EventRevenueRequest;
@@ -46,7 +48,10 @@ public class EventRevenueService {
                 request.transactionDate(),
                 request.amount(),
                 request.guestCount(),
-                buildDescription(request)
+                buildDescription(request),
+                OperationSource.EVENT_REVENUE,
+                OperationContext.EVENT,
+                null
         ));
         if (contactId != null) {
             contactService.createMovement(contactId, new ContactMovementRequest(

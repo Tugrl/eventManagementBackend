@@ -2,6 +2,8 @@ package com.dada.eventmanagement.inventory.service;
 
 import com.dada.eventmanagement.common.enums.InventoryMovementType;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationContext;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
@@ -132,7 +134,10 @@ public class InventoryService {
                 request.usageDate(),
                 totalCost,
                 request.actualGuestCount(),
-                usageFinanceDescription(item, request)
+                usageFinanceDescription(item, request),
+                waste.compareTo(BigDecimal.ZERO) > 0 ? OperationSource.INVENTORY_WASTE : OperationSource.INVENTORY_USAGE,
+                OperationContext.EVENT,
+                request.eventId()
         ));
 
         EventInventoryUsage usage = new EventInventoryUsage();

@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 public interface EventRepository extends JpaRepository<Event, Long> {
     List<Event> findByCompanyIdAndIsDeletedFalseOrderByEventDateAsc(Long companyId);
     Optional<Event> findByIdAndCompanyIdAndIsDeletedFalse(Long id, Long companyId);
+    Optional<Event> findByIdAndCompanyId(Long id, Long companyId);
     long countByCompanyIdAndIsDeletedFalse(Long companyId);
     long countByCompanyIdAndStatusAndIsDeletedFalse(Long companyId, EventStatus status);
     long countByCompanyIdAndEventDateGreaterThanEqualAndIsDeletedFalse(Long companyId, LocalDate date);

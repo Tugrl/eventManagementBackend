@@ -3,6 +3,7 @@ package com.dada.eventmanagement.staff.controller;
 import com.dada.eventmanagement.common.enums.EmployeeType;
 import com.dada.eventmanagement.common.response.ApiResponse;
 import com.dada.eventmanagement.staff.dto.EmployeeRequest;
+import com.dada.eventmanagement.staff.dto.EventStaffAssignmentRequest;
 import com.dada.eventmanagement.staff.dto.ServicePayoutRequest;
 import com.dada.eventmanagement.staff.service.StaffService;
 import jakarta.validation.Valid;
@@ -55,6 +56,16 @@ public class StaffController {
     @PostMapping("/service-payouts")
     public ApiResponse<?> createPayout(@Valid @RequestBody ServicePayoutRequest request) {
         return ApiResponse.ok("Service payout created", service.createPayout(request));
+    }
+
+    @GetMapping("/events/{eventId}/assignments")
+    public ApiResponse<?> eventAssignments(@PathVariable Long eventId) {
+        return ApiResponse.ok("Event staff assignments listed", service.eventAssignments(eventId));
+    }
+
+    @PutMapping("/events/{eventId}/assignments")
+    public ApiResponse<?> saveEventAssignments(@PathVariable Long eventId, @Valid @RequestBody EventStaffAssignmentRequest request) {
+        return ApiResponse.ok("Event staff assignments saved", service.saveEventAssignments(eventId, request));
     }
 
     @PutMapping("/service-payouts/{id}")

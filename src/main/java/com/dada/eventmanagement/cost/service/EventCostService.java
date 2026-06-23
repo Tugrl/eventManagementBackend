@@ -2,6 +2,8 @@ package com.dada.eventmanagement.cost.service;
 
 import com.dada.eventmanagement.common.enums.CalculationType;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationContext;
+import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
@@ -102,7 +104,10 @@ public class EventCostService {
                 request.transactionDate(),
                 MathUtils.money(entity.getTotalCost()),
                 event.getExpectedGuestCount(),
-                financeDescription(entity, request)
+                financeDescription(entity, request),
+                OperationSource.COMPANY_EXPENSE,
+                OperationContext.EVENT,
+                entity.getId()
         ));
         entity.setFinancialTransactionId(tx.getId());
         return toResponse(repository.save(entity));

@@ -1,5 +1,6 @@
 package com.dada.eventmanagement.consumption.dto;
 
+import com.dada.eventmanagement.common.enums.InventoryUnit;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -9,6 +10,7 @@ public record ConsumptionPlanRequest(
         @NotNull(message = "Inventory item is required") Long inventoryItemId,
         @NotBlank(message = "Category is required") String category,
         @NotNull(message = "Estimated consumption is required") @DecimalMin(value = "0.0", inclusive = false) BigDecimal estimatedConsumptionPerPerson,
+        @NotNull(message = "Consumption unit is required") InventoryUnit inputUnit,
         Integer expectedGuestCount,
         @NotNull(message = "Waste percentage is required") @DecimalMin(value = "0.0", inclusive = true) BigDecimal wastePercentage,
         String notes

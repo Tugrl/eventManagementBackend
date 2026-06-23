@@ -1,0 +1,16 @@
+package com.dada.eventmanagement.common.enums;
+
+public enum OperationSource {
+    MANUAL,
+    FINANCE_DOCUMENT_SETTLEMENT,
+    RESERVATION_PAYMENT,
+    EVENT_REVENUE,
+    COMPANY_EXPENSE,
+    EVENT_CLOSING_COST,
+    STAFF_PAYOUT,
+    INVENTORY_USAGE,
+    INVENTORY_WASTE,
+    CONTACT_COLLECTION,
+    CONTACT_PAYMENT,
+    SYSTEM_ADJUSTMENT
+}
