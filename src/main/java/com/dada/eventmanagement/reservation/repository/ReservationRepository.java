@@ -3,6 +3,7 @@ package com.dada.eventmanagement.reservation.repository;
 import com.dada.eventmanagement.common.enums.DepositStatus;
 import com.dada.eventmanagement.common.enums.ReservationStatus;
 import com.dada.eventmanagement.reservation.entity.Reservation;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -11,6 +12,7 @@ import org.springframework.data.jpa.repository.Query;
 public interface ReservationRepository extends JpaRepository<Reservation, Long> {
     List<Reservation> findByCompanyIdOrderByCreatedAtDesc(Long companyId);
     List<Reservation> findByCompanyIdAndEventIdOrderByCreatedAtDesc(Long companyId, Long eventId);
+    List<Reservation> findByCompanyIdAndEventIdIn(Long companyId, Collection<Long> eventIds);
     List<Reservation> findByCompanyIdAndReservationStatusOrderByCreatedAtDesc(Long companyId, ReservationStatus reservationStatus);
     List<Reservation> findByCompanyIdAndEventIdAndReservationStatusOrderByCreatedAtDesc(Long companyId, Long eventId, ReservationStatus reservationStatus);
     Optional<Reservation> findByIdAndCompanyId(Long id, Long companyId);

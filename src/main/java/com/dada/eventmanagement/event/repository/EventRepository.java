@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 
 public interface EventRepository extends JpaRepository<Event, Long> {
     List<Event> findByCompanyIdAndIsDeletedFalseOrderByEventDateAsc(Long companyId);
+    List<Event> findByCompanyIdAndEventDateBetweenAndIsDeletedFalseOrderByEventDateAsc(Long companyId, LocalDate startDate, LocalDate endDate);
     Optional<Event> findByIdAndCompanyIdAndIsDeletedFalse(Long id, Long companyId);
     Optional<Event> findByIdAndCompanyId(Long id, Long companyId);
     long countByCompanyIdAndIsDeletedFalse(Long companyId);

@@ -9,5 +9,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ContactRepository extends JpaRepository<Contact, Long> {
     List<Contact> findByCompanyIdAndIsActiveTrueOrderByNameAsc(Long companyId);
     List<Contact> findByCompanyIdAndContactTypeAndIsActiveTrueOrderByNameAsc(Long companyId, ContactType contactType);
+    List<Contact> findByCompanyIdAndIdInAndIsActiveTrue(Long companyId, List<Long> ids);
     Optional<Contact> findByIdAndCompanyIdAndIsActiveTrue(Long id, Long companyId);
 }

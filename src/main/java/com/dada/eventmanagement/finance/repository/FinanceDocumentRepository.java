@@ -33,4 +33,11 @@ public interface FinanceDocumentRepository extends JpaRepository<FinanceDocument
     );
 
     List<FinanceDocument> findByCompanyIdAndStatusNotOrderByIssueDateDescIdDesc(Long companyId, FinanceDocumentStatus status);
+    List<FinanceDocument> findByCompanyIdAndContactIdInAndStatusNot(Long companyId, List<Long> contactIds, FinanceDocumentStatus status);
+    List<FinanceDocument> findByCompanyIdAndEventIdAndDocumentTypeAndStatusNotOrderByIssueDateDescIdDesc(
+            Long companyId,
+            Long eventId,
+            FinanceDocumentType documentType,
+            FinanceDocumentStatus status
+    );
 }

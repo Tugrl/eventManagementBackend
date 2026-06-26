@@ -9,4 +9,5 @@ public interface FinanceDocumentSettlementRepository extends JpaRepository<Finan
     List<FinanceDocumentSettlement> findByCompanyIdAndDocumentIdOrderBySettlementDateDescIdDesc(Long companyId, Long documentId);
     List<FinanceDocumentSettlement> findByCompanyIdAndDocumentIdInOrderBySettlementDateDescIdDesc(Long companyId, List<Long> documentIds);
     Optional<FinanceDocumentSettlement> findByIdAndCompanyId(Long id, Long companyId);
+    List<FinanceDocumentSettlement> findByCompanyIdAndFinancialTransactionId(Long companyId, Long financialTransactionId);
 }

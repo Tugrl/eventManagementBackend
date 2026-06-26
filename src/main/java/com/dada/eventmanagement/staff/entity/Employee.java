@@ -19,6 +19,7 @@ public class Employee {
     private Long companyId;
     @Column(nullable = false)
     private String fullName;
+    private Long contactId;
     private String roleName;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

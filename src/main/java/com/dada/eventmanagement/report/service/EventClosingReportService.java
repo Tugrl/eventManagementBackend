@@ -1,13 +1,27 @@
 package com.dada.eventmanagement.report.service;
 
+import com.dada.eventmanagement.common.enums.CostPaymentStatus;
 import com.dada.eventmanagement.common.enums.EventStatus;
+import com.dada.eventmanagement.common.enums.FinanceDocumentStatus;
+import com.dada.eventmanagement.common.enums.FinanceDocumentType;
+import com.dada.eventmanagement.common.enums.FinancialTransactionStatus;
+import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.OperationSource;
+import com.dada.eventmanagement.common.enums.ServicePayoutSource;
+import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
-import com.dada.eventmanagement.cost.service.EventCostService;
+import com.dada.eventmanagement.cost.dto.EventCostRealizationResponse;
 import com.dada.eventmanagement.cost.service.EventCostRealizationService;
+import com.dada.eventmanagement.cost.service.EventCostService;
 import com.dada.eventmanagement.event.entity.Event;
 import com.dada.eventmanagement.event.repository.EventRepository;
 import com.dada.eventmanagement.event.service.EventService;
+import com.dada.eventmanagement.finance.dto.FinanceDocumentResponse;
+import com.dada.eventmanagement.finance.entity.FinanceDocument;
+import com.dada.eventmanagement.finance.entity.FinancialTransaction;
+import com.dada.eventmanagement.finance.repository.FinanceDocumentRepository;
+import com.dada.eventmanagement.finance.repository.FinancialTransactionRepository;
 import com.dada.eventmanagement.finance.service.FinanceService;
 import com.dada.eventmanagement.report.dto.ClosingReportRequest;
 import com.dada.eventmanagement.report.dto.ClosingReportResponse;
@@ -15,6 +29,10 @@ import com.dada.eventmanagement.report.entity.EventClosingReport;
 import com.dada.eventmanagement.report.repository.EventClosingReportRepository;
 import com.dada.eventmanagement.reservation.entity.Reservation;
 import com.dada.eventmanagement.reservation.repository.ReservationRepository;
+import com.dada.eventmanagement.staff.entity.ServicePayout;
+import com.dada.eventmanagement.staff.entity.ServicePayoutItem;
+import com.dada.eventmanagement.staff.repository.ServicePayoutItemRepository;
+import com.dada.eventmanagement.staff.repository.ServicePayoutRepository;
 import com.dada.eventmanagement.staff.service.StaffService;
 import java.math.BigDecimal;
 import java.util.List;
@@ -30,17 +48,38 @@ public class EventClosingReportService {
     private final EventCostService eventCostService;
     private final EventCostRealizationService realizationService;
     private final FinanceService financeService;
+    private final FinancialTransactionRepository financialTransactionRepository;
+    private final FinanceDocumentRepository financeDocumentRepository;
     private final ReservationRepository reservationRepository;
+    private final ServicePayoutRepository payoutRepository;
+    private final ServicePayoutItemRepository payoutItemRepository;
     private final StaffService staffService;
 
-    public EventClosingReportService(EventClosingReportRepository repository, EventService eventService, EventRepository eventRepository, EventCostService eventCostService, EventCostRealizationService realizationService, FinanceService financeService, ReservationRepository reservationRepository, StaffService staffService) {
+    public EventClosingReportService(
+            EventClosingReportRepository repository,
+            EventService eventService,
+            EventRepository eventRepository,
+            EventCostService eventCostService,
+            EventCostRealizationService realizationService,
+            FinanceService financeService,
+            FinancialTransactionRepository financialTransactionRepository,
+            FinanceDocumentRepository financeDocumentRepository,
+            ReservationRepository reservationRepository,
+            ServicePayoutRepository payoutRepository,
+            ServicePayoutItemRepository payoutItemRepository,
+            StaffService staffService
+    ) {
         this.repository = repository;
         this.eventService = eventService;
         this.eventRepository = eventRepository;
         this.eventCostService = eventCostService;
         this.realizationService = realizationService;
         this.financeService = financeService;
+        this.financialTransactionRepository = financialTransactionRepository;
+        this.financeDocumentRepository = financeDocumentRepository;
         this.reservationRepository = reservationRepository;
+        this.payoutRepository = payoutRepository;
+        this.payoutItemRepository = payoutItemRepository;
         this.staffService = staffService;
     }
 
@@ -85,11 +124,11 @@ public class EventClosingReportService {
         BigDecimal difference = numbers.actualProfit().subtract(estimatedProfit);
 
         report.setActualGuestCount(numbers.actualGuestCount());
-        report.setActualTicketRevenue(numbers.collectedPaymentAmount());
-        report.setActualDepositAmount(numbers.collectedPaymentAmount());
+        report.setActualTicketRevenue(numbers.collectedRevenueAmount());
+        report.setActualDepositAmount(numbers.collectedRevenueAmount());
         report.setActualDoorPaymentAmount(BigDecimal.ZERO);
         report.setActualExtraSalesAmount(BigDecimal.ZERO);
-        report.setActualTotalRevenue(numbers.collectedPaymentAmount());
+        report.setActualTotalRevenue(numbers.collectedRevenueAmount());
         report.setActualTotalCost(numbers.actualTotalCost());
         report.setActualProfit(numbers.actualProfit());
         report.setEstimatedTotalRevenue(MathUtils.money(estimatedRevenue));
@@ -108,14 +147,28 @@ public class EventClosingReportService {
                 r.getActualGuestCount(),
                 numbers.finalTicketPrice(),
                 numbers.grossTicketPotential(),
-                numbers.collectedPaymentAmount(),
-                numbers.remainingReceivableAmount(),
+                numbers.collectedRevenueAmount(),
+                numbers.openReceivableAmount(),
                 MathUtils.money(r.getActualTicketRevenue()),
                 MathUtils.money(r.getActualDepositAmount()),
                 MathUtils.money(r.getActualDoorPaymentAmount()),
                 MathUtils.money(r.getActualExtraSalesAmount()),
                 MathUtils.money(r.getActualTotalRevenue()),
                 MathUtils.money(r.getActualTotalCost()),
+                numbers.collectedRevenueAmount(),
+                numbers.openReceivableAmount(),
+                numbers.totalAccruedRevenueAmount(),
+                numbers.paidCostAmount(),
+                numbers.openPayableAmount(),
+                numbers.totalAccruedCostAmount(),
+                numbers.cashBasisProfit(),
+                numbers.accrualBasisProfit(),
+                MathUtils.money(numbers.servicePayoutTotal()),
+                MathUtils.money(numbers.servicePayoutPaidAmount()),
+                MathUtils.money(numbers.servicePayoutRemainingAmount()),
+                MathUtils.money(numbers.servicePayoutDocumentBackedAmount()),
+                numbers.servicePayoutOpenDocumentCount(),
+                numbers.servicePayoutSettledDocumentCount(),
                 MathUtils.money(r.getActualProfit()),
                 MathUtils.money(r.getEstimatedTotalRevenue()),
                 MathUtils.money(r.getEstimatedTotalCost()),
@@ -135,20 +188,32 @@ public class EventClosingReportService {
         int actualGuestCount = reservations.stream().mapToInt(Reservation::getGuestCount).sum();
         BigDecimal finalTicketPrice = MathUtils.money(event.getFinalTicketPrice());
         BigDecimal grossTicketPotential = estimatedRevenue(event);
-        BigDecimal collectedPaymentAmount = MathUtils.money(financeService.eventIncomeTransactions(event.getId()).stream()
-                .map(row -> row.amount())
-                .reduce(BigDecimal.ZERO, BigDecimal::add));
-        BigDecimal remainingReceivableAmount = MathUtils.money(grossTicketPotential.subtract(collectedPaymentAmount).max(BigDecimal.ZERO));
-        BigDecimal actualTotalCost = realizationService.totalFinalizedActualCost(event.getId())
-                .add(staffService.totalFinalizedServiceCost(event.getId()));
-        BigDecimal actualProfit = MathUtils.money(collectedPaymentAmount.subtract(actualTotalCost));
+
+        RevenueSummary revenueSummary = revenueSummary(event);
+        CostSummary costSummary = costSummary(event);
+        ServicePayoutSummary servicePayoutSummary = servicePayoutSummary(event.getCompanyId(), event.getId());
+        BigDecimal actualTotalCost = costSummary.totalAccruedCostAmount().add(servicePayoutSummary.servicePayoutTotal());
+        BigDecimal actualProfit = MathUtils.money(revenueSummary.collectedRevenueAmount().subtract(actualTotalCost));
+
         return new ReportNumbers(
                 actualGuestCount,
                 finalTicketPrice,
                 grossTicketPotential,
-                collectedPaymentAmount,
-                remainingReceivableAmount,
+                revenueSummary.collectedRevenueAmount(),
+                revenueSummary.openReceivableAmount(),
+                revenueSummary.totalAccruedRevenueAmount(),
+                costSummary.paidCostAmount(),
+                costSummary.openPayableAmount(),
+                costSummary.totalAccruedCostAmount(),
+                MathUtils.money(revenueSummary.collectedRevenueAmount().subtract(costSummary.paidCostAmount())),
+                MathUtils.money(revenueSummary.totalAccruedRevenueAmount().subtract(costSummary.totalAccruedCostAmount())),
                 actualTotalCost,
+                servicePayoutSummary.servicePayoutTotal(),
+                servicePayoutSummary.servicePayoutPaidAmount(),
+                servicePayoutSummary.servicePayoutRemainingAmount(),
+                servicePayoutSummary.servicePayoutDocumentBackedAmount(),
+                servicePayoutSummary.servicePayoutOpenDocumentCount(),
+                servicePayoutSummary.servicePayoutSettledDocumentCount(),
                 actualProfit
         );
     }
@@ -162,14 +227,169 @@ public class EventClosingReportService {
                 .multiply(BigDecimal.valueOf(event.getExpectedGuestCount())));
     }
 
+    private RevenueSummary revenueSummary(Event event) {
+        List<FinancialTransaction> transactions = financialTransactionRepository
+                .findByCompanyIdAndEventIdAndTransactionTypeAndStatusOrderByTransactionDateDescIdDesc(
+                        event.getCompanyId(),
+                        event.getId(),
+                        FinancialTransactionType.INCOME,
+                        FinancialTransactionStatus.ACTIVE
+                );
+        BigDecimal directCollectedRevenue = transactions.stream()
+                .filter(tx -> tx.getOperationSource() == OperationSource.EVENT_REVENUE)
+                .map(FinancialTransaction::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        List<FinanceDocument> documents = financeDocumentRepository
+                .findByCompanyIdAndEventIdAndDocumentTypeAndStatusNotOrderByIssueDateDescIdDesc(
+                        event.getCompanyId(),
+                        event.getId(),
+                        FinanceDocumentType.INCOME,
+                        FinanceDocumentStatus.VOIDED
+                );
+
+        BigDecimal settledAmount = BigDecimal.ZERO;
+        BigDecimal remainingAmount = BigDecimal.ZERO;
+        for (FinanceDocument document : documents) {
+            FinanceDocumentResponse detail = financeService.documentDetail(document.getId());
+            settledAmount = settledAmount.add(MathUtils.money(detail.settledAmount()));
+            remainingAmount = remainingAmount.add(MathUtils.money(detail.remainingAmount()));
+        }
+
+        BigDecimal collectedRevenue = MathUtils.money(directCollectedRevenue.add(settledAmount));
+        BigDecimal totalAccruedRevenue = MathUtils.money(collectedRevenue.add(remainingAmount));
+        return new RevenueSummary(
+                collectedRevenue,
+                MathUtils.money(remainingAmount),
+                totalAccruedRevenue
+        );
+    }
+
+    private CostSummary costSummary(Event event) {
+        List<EventCostRealizationResponse> rows = realizationService.list(event.getId());
+        BigDecimal paidCost = BigDecimal.ZERO;
+        BigDecimal openPayable = BigDecimal.ZERO;
+        BigDecimal totalAccruedCost = BigDecimal.ZERO;
+
+        for (EventCostRealizationResponse row : rows) {
+            if (row.finalized() == null || !row.finalized()) {
+                continue;
+            }
+            if (row.financeDocumentId() != null) {
+                FinanceDocumentResponse detail = financeService.documentDetail(row.financeDocumentId());
+                totalAccruedCost = totalAccruedCost.add(MathUtils.money(detail.totalAmount()));
+                paidCost = paidCost.add(MathUtils.money(detail.settledAmount()));
+                openPayable = openPayable.add(MathUtils.money(detail.remainingAmount()));
+            } else {
+                totalAccruedCost = totalAccruedCost.add(MathUtils.money(row.actualTotalCost()));
+                if (row.paymentStatus() == CostPaymentStatus.PAID) {
+                    paidCost = paidCost.add(MathUtils.money(row.actualTotalCost()));
+                }
+            }
+        }
+
+        return new CostSummary(
+                MathUtils.money(paidCost),
+                MathUtils.money(openPayable),
+                MathUtils.money(totalAccruedCost)
+        );
+    }
+
+    private ServicePayoutSummary servicePayoutSummary(Long companyId, Long eventId) {
+        ServicePayout payout = payoutRepository.findByCompanyIdAndEventIdAndPayoutSource(companyId, eventId, ServicePayoutSource.EVENT_CLOSING)
+                .filter(row -> row.getClosingStatus() != null && row.getClosingStatus() != com.dada.eventmanagement.common.enums.ServicePayoutClosingStatus.DRAFT)
+                .orElse(null);
+        if (payout == null) {
+            return new ServicePayoutSummary(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0);
+        }
+
+        List<ServicePayoutItem> items = payoutItemRepository.findByCompanyIdAndPayoutId(companyId, payout.getId());
+        boolean hasDocumentBackedItems = items.stream().anyMatch(item -> item.getFinanceDocumentId() != null);
+        if (hasDocumentBackedItems && items.stream().anyMatch(item -> item.getPayoutAmount().compareTo(BigDecimal.ZERO) > 0 && item.getFinanceDocumentId() == null)) {
+            throw new BadRequestException("Servis hakedişi raporu belge uyumsuzluğu içeriyor");
+        }
+
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal paid = BigDecimal.ZERO;
+        BigDecimal remaining = BigDecimal.ZERO;
+        BigDecimal documentBacked = BigDecimal.ZERO;
+        int openCount = 0;
+        int settledCount = 0;
+
+        for (ServicePayoutItem item : items) {
+            if (item.getPayoutAmount() == null || item.getPayoutAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            total = total.add(item.getPayoutAmount());
+            if (item.getFinanceDocumentId() != null) {
+                FinanceDocumentResponse document = financeService.documentDetail(item.getFinanceDocumentId());
+                if (document.status() != FinanceDocumentStatus.VOIDED) {
+                    documentBacked = documentBacked.add(item.getPayoutAmount());
+                    paid = paid.add(MathUtils.money(document.settledAmount()));
+                    remaining = remaining.add(MathUtils.money(document.remainingAmount()));
+                    if (document.status() == FinanceDocumentStatus.SETTLED) {
+                        settledCount++;
+                    } else if (document.status() == FinanceDocumentStatus.OPEN || document.status() == FinanceDocumentStatus.PARTIALLY_SETTLED) {
+                        openCount++;
+                    }
+                }
+            } else {
+                if (payout.getPaymentStatus() == CostPaymentStatus.PAID) {
+                    paid = paid.add(item.getPayoutAmount());
+                } else {
+                    remaining = remaining.add(item.getPayoutAmount());
+                    openCount++;
+                }
+            }
+        }
+
+        return new ServicePayoutSummary(total, paid, remaining, documentBacked, openCount, settledCount);
+    }
+
     private record ReportNumbers(
             Integer actualGuestCount,
             BigDecimal finalTicketPrice,
             BigDecimal grossTicketPotential,
-            BigDecimal collectedPaymentAmount,
-            BigDecimal remainingReceivableAmount,
+            BigDecimal collectedRevenueAmount,
+            BigDecimal openReceivableAmount,
+            BigDecimal totalAccruedRevenueAmount,
+            BigDecimal paidCostAmount,
+            BigDecimal openPayableAmount,
+            BigDecimal totalAccruedCostAmount,
+            BigDecimal cashBasisProfit,
+            BigDecimal accrualBasisProfit,
             BigDecimal actualTotalCost,
+            BigDecimal servicePayoutTotal,
+            BigDecimal servicePayoutPaidAmount,
+            BigDecimal servicePayoutRemainingAmount,
+            BigDecimal servicePayoutDocumentBackedAmount,
+            Integer servicePayoutOpenDocumentCount,
+            Integer servicePayoutSettledDocumentCount,
             BigDecimal actualProfit
+    ) {
+    }
+
+    private record RevenueSummary(
+            BigDecimal collectedRevenueAmount,
+            BigDecimal openReceivableAmount,
+            BigDecimal totalAccruedRevenueAmount
+    ) {
+    }
+
+    private record CostSummary(
+            BigDecimal paidCostAmount,
+            BigDecimal openPayableAmount,
+            BigDecimal totalAccruedCostAmount
+    ) {
+    }
+
+    private record ServicePayoutSummary(
+            BigDecimal servicePayoutTotal,
+            BigDecimal servicePayoutPaidAmount,
+            BigDecimal servicePayoutRemainingAmount,
+            BigDecimal servicePayoutDocumentBackedAmount,
+            Integer servicePayoutOpenDocumentCount,
+            Integer servicePayoutSettledDocumentCount
     ) {
     }
 }

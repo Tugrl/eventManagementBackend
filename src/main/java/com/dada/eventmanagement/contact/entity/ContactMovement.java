@@ -21,6 +21,8 @@ public class ContactMovement {
     @Column(nullable = false)
     private Long contactId;
     private Long financialTransactionId;
+    private Long documentId;
+    private Long settlementId;
     @Column(nullable = false)
     private LocalDate movementDate;
     @Enumerated(EnumType.STRING)
@@ -30,6 +32,8 @@ public class ContactMovement {
     private BigDecimal amount = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal balanceDelta = BigDecimal.ZERO;
+    @Column(precision = 19, scale = 2)
+    private BigDecimal remainingDocumentAmount;
     @Column(columnDefinition = "TEXT")
     private String description;
     private Long createdByUserId;

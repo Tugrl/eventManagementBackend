@@ -2,6 +2,8 @@ package com.dada.eventmanagement.staff.service;
 
 import com.dada.eventmanagement.common.enums.EmployeeType;
 import com.dada.eventmanagement.common.enums.FinancialTransactionType;
+import com.dada.eventmanagement.common.enums.FinanceDocumentStatus;
+import com.dada.eventmanagement.common.enums.FinanceDocumentType;
 import com.dada.eventmanagement.common.enums.OperationContext;
 import com.dada.eventmanagement.common.enums.OperationSource;
 import com.dada.eventmanagement.common.enums.CalculationType;
@@ -17,8 +19,15 @@ import com.dada.eventmanagement.cost.repository.CostCategoryRepository;
 import com.dada.eventmanagement.cost.repository.EventCostRepository;
 import com.dada.eventmanagement.event.entity.Event;
 import com.dada.eventmanagement.event.repository.EventRepository;
+import com.dada.eventmanagement.contact.entity.Contact;
+import com.dada.eventmanagement.contact.repository.ContactRepository;
+import com.dada.eventmanagement.contact.service.ContactService;
+import com.dada.eventmanagement.contact.dto.ContactMovementRequest;
+import com.dada.eventmanagement.contact.dto.ContactMovementResponse;
 import com.dada.eventmanagement.finance.dto.FinancialTransactionRequest;
 import com.dada.eventmanagement.finance.dto.VoidTransactionRequest;
+import com.dada.eventmanagement.finance.dto.FinanceDocumentResponse;
+import com.dada.eventmanagement.finance.dto.FinanceDocumentSettlementResponse;
 import com.dada.eventmanagement.finance.entity.FinancialTransaction;
 import com.dada.eventmanagement.finance.service.FinanceService;
 import com.dada.eventmanagement.staff.dto.*;
@@ -33,6 +42,7 @@ import com.dada.eventmanagement.staff.repository.ServicePayoutRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -56,6 +66,8 @@ public class StaffService {
     private final EventRepository eventRepository;
     private final EventCostRepository eventCostRepository;
     private final CostCategoryRepository costCategoryRepository;
+    private final ContactRepository contactRepository;
+    private final ContactService contactService;
     private final FinanceService financeService;
 
     public StaffService(
@@ -66,6 +78,8 @@ public class StaffService {
             EventRepository eventRepository,
             EventCostRepository eventCostRepository,
             CostCategoryRepository costCategoryRepository,
+            ContactRepository contactRepository,
+            ContactService contactService,
             FinanceService financeService
     ) {
         this.employeeRepository = employeeRepository;
@@ -75,6 +89,8 @@ public class StaffService {
         this.eventRepository = eventRepository;
         this.eventCostRepository = eventCostRepository;
         this.costCategoryRepository = costCategoryRepository;
+        this.contactRepository = contactRepository;
+        this.contactService = contactService;
         this.financeService = financeService;
     }
 
@@ -83,7 +99,7 @@ public class StaffService {
         List<Employee> rows = type == null
                 ? employeeRepository.findByCompanyIdAndIsActiveTrueOrderByFullNameAsc(companyId)
                 : employeeRepository.findByCompanyIdAndEmployeeTypeAndIsActiveTrueOrderByFullNameAsc(companyId, type);
-        return rows.stream().map(this::toResponse).toList();
+        return mapEmployees(rows);
     }
 
     @Transactional
@@ -91,15 +107,17 @@ public class StaffService {
         Employee employee = new Employee();
         employee.setCompanyId(SecurityUtils.currentCompanyId());
         apply(employee, request);
+        employee.setContactId(resolveContactId(request.contactId()));
         employee.setIsActive(true);
-        return toResponse(employeeRepository.save(employee));
+        return toResponse(employeeRepository.save(employee), contactMap(List.of(employee)));
     }
 
     @Transactional
     public EmployeeResponse updateEmployee(Long id, EmployeeRequest request) {
         Employee employee = findEmployee(id);
         apply(employee, request);
-        return toResponse(employeeRepository.save(employee));
+        employee.setContactId(resolveContactId(request.contactId()));
+        return toResponse(employeeRepository.save(employee), contactMap(List.of(employee)));
     }
 
     @Transactional
@@ -334,6 +352,8 @@ public class StaffService {
 
     @Transactional
     public ServicePayoutResponse finalizeClosingServicePayout(Long eventId) {
+        Event event = eventRepository.findByIdAndCompanyIdAndIsDeletedFalse(eventId, SecurityUtils.currentCompanyId())
+                .orElseThrow(() -> new ResourceNotFoundException("Event not found"));
         ServicePayout payout = findClosingPayout(eventId);
         if (payout.getClosingStatus() != ServicePayoutClosingStatus.DRAFT) {
             return toResponse(payout);
@@ -352,9 +372,15 @@ public class StaffService {
             payout.setAmountPerPoint(payout.getTotalServiceAmount().divide(totalPoints, 2, RoundingMode.HALF_UP));
             payoutRepository.save(payout);
             rebuildClosingItems(payout, eligible);
-            if (itemRepository.findByCompanyIdAndPayoutId(payout.getCompanyId(), payout.getId()).isEmpty()) {
+            List<ServicePayoutItem> items = itemRepository.findByCompanyIdAndPayoutId(payout.getCompanyId(), payout.getId());
+            if (items.isEmpty()) {
                 throw new BadRequestException("Service payout has no eligible employees");
             }
+            if (payout.getCategoryId() == null) {
+                throw new BadRequestException("Financial category is required for service payout");
+            }
+            validateClosingItemContacts(payout, items);
+            createClosingPayableDocuments(payout, items, event);
             if (payout.getPaymentStatus() == CostPaymentStatus.PAID) {
                 postClosingPayout(payout);
             }
@@ -372,12 +398,19 @@ public class StaffService {
         if (payout.getPaymentStatus() == CostPaymentStatus.PAID) {
             return toResponse(payout);
         }
+        List<ServicePayoutItem> items = itemRepository.findByCompanyIdAndPayoutId(payout.getCompanyId(), payout.getId());
+        if (items.isEmpty()) {
+            throw new BadRequestException("Service payout has no eligible employees");
+        }
+        if (payout.getCategoryId() == null) {
+            throw new BadRequestException("Financial category is required for service payout");
+        }
         payout.setAccountId(request.accountId());
         payout.setPaymentMethodId(request.paymentMethodId());
         payout.setCategoryId(request.categoryId());
         payout.setPaymentDate(request.paymentDate());
         payout.setPaymentStatus(CostPaymentStatus.PAID);
-        postClosingPayout(payout);
+        payClosingPayables(payout, items, request);
         return toResponse(payoutRepository.save(payout));
     }
 
@@ -410,9 +443,29 @@ public class StaffService {
     private ServicePayoutResponse closingPreview(Event event) {
         List<EventStaffAssignment> assignments = eligibleAssignments(event.getCompanyId(), event.getId());
         Map<Long, Employee> employees = activeEmployeeMap(event.getCompanyId());
+        Map<Long, Contact> contacts = contactMap(new ArrayList<>(employees.values()));
         BigDecimal totalPoints = assignments.stream().map(EventStaffAssignment::getServicePoint).reduce(BigDecimal.ZERO, BigDecimal::add);
         List<ServicePayoutItemResponse> items = assignments.stream()
-                .map(row -> new ServicePayoutItemResponse(row.getEmployeeId(), employeeName(employees, row.getEmployeeId()), row.getServicePoint(), BigDecimal.ZERO))
+                .map(row -> {
+                    Employee employee = employees.get(row.getEmployeeId());
+                    Contact contact = employee == null || employee.getContactId() == null ? null : contacts.get(employee.getContactId());
+                    return new ServicePayoutItemResponse(
+                            row.getEmployeeId(),
+                            employeeName(employees, row.getEmployeeId()),
+                            row.getServicePoint(),
+                            BigDecimal.ZERO,
+                            employee == null ? null : employee.getContactId(),
+                            contact == null ? null : contact.getName(),
+                            null,
+                            null,
+                            false,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                    );
+                })
                 .toList();
         return new ServicePayoutResponse(null, event.getEventDate(), event.getId(), ServicePayoutSource.EVENT_CLOSING,
                 ServicePayoutClosingStatus.DRAFT, CostPaymentStatus.UNPAID, BigDecimal.ZERO, totalPoints,
@@ -466,6 +519,144 @@ public class StaffService {
             item.setPoints(assignment.getServicePoint());
             item.setPayoutAmount(amount);
             itemRepository.save(item);
+        }
+    }
+
+    private void validateClosingItemContacts(ServicePayout payout, List<ServicePayoutItem> items) {
+        List<ServicePayoutItem> payableItems = items.stream()
+                .filter(item -> item.getPayoutAmount() != null && item.getPayoutAmount().compareTo(BigDecimal.ZERO) > 0)
+                .toList();
+        if (payableItems.isEmpty()) {
+            return;
+        }
+
+        Long companyId = payout.getCompanyId();
+        Map<Long, Employee> employees = employeeRepository.findByCompanyIdAndIdIn(
+                        companyId,
+                        payableItems.stream().map(ServicePayoutItem::getEmployeeId).distinct().toList()
+                ).stream()
+                .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        List<Long> contactIds = employees.values().stream()
+                .map(Employee::getContactId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        Map<Long, Contact> contacts = contactIds.isEmpty()
+                ? Map.of()
+                : contactRepository.findByCompanyIdAndIdInAndIsActiveTrue(companyId, contactIds).stream()
+                .collect(Collectors.toMap(Contact::getId, Function.identity()));
+
+        List<String> missingNames = new ArrayList<>();
+        for (ServicePayoutItem item : payableItems) {
+            Employee employee = employees.get(item.getEmployeeId());
+            if (employee == null) {
+                missingNames.add("Employee #" + item.getEmployeeId());
+                continue;
+            }
+            Long contactId = employee.getContactId();
+            if (contactId == null || !contacts.containsKey(contactId)) {
+                missingNames.add(employee.getFullName());
+            }
+        }
+
+        if (!missingNames.isEmpty()) {
+            throw new BadRequestException("Servis hakedişi finalize edilemez. Cari bağlantısı eksik personeller: " + String.join(", ", missingNames));
+        }
+    }
+
+    private void createClosingPayableDocuments(ServicePayout payout, List<ServicePayoutItem> items, Event event) {
+        Map<Long, Employee> employees = employeeRepository.findByCompanyIdAndIdIn(
+                        payout.getCompanyId(),
+                        items.stream().map(ServicePayoutItem::getEmployeeId).distinct().toList()
+                ).stream()
+                .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        Map<Long, Contact> contacts = contactMap(new ArrayList<>(employees.values()));
+
+        for (ServicePayoutItem item : items) {
+            if (item.getPayoutAmount() == null || item.getPayoutAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            if (item.getFinanceDocumentId() != null) {
+                continue;
+            }
+
+            Employee employee = employees.get(item.getEmployeeId());
+            if (employee == null || employee.getContactId() == null) {
+                throw new BadRequestException("Servis hakedişi finalize edilemez. Cari bağlantısı eksik personeller: " + employeeLabel(employee, item.getEmployeeId()));
+            }
+            Contact contact = contacts.get(employee.getContactId());
+            if (contact == null) {
+                throw new BadRequestException("Servis hakedişi finalize edilemez. Cari bağlantısı eksik personeller: " + employee.getFullName());
+            }
+
+            ContactMovementResponse movement = contactService.createMovement(contact.getId(), new ContactMovementRequest(
+                    payout.getPayoutDate(),
+                    com.dada.eventmanagement.common.enums.ContactMovementType.PAYABLE,
+                    item.getPayoutAmount(),
+                    null,
+                    null,
+                    null,
+                    payout.getCategoryId(),
+                    null,
+                    payout.getEventId(),
+                    null,
+                    null,
+                    servicePayoutDescription(event, employee, payout)
+            ));
+            item.setContactMovementId(movement.id());
+            item.setFinanceDocumentId(movement.documentId());
+            itemRepository.save(item);
+        }
+    }
+
+    private void payClosingPayables(ServicePayout payout, List<ServicePayoutItem> items, ClosingServicePayoutPaymentRequest request) {
+        Map<Long, Employee> employees = employeeRepository.findByCompanyIdAndIdIn(
+                        payout.getCompanyId(),
+                        items.stream().map(ServicePayoutItem::getEmployeeId).distinct().toList()
+                ).stream()
+                .collect(Collectors.toMap(Employee::getId, Function.identity()));
+
+        for (ServicePayoutItem item : items) {
+            if (item.getFinanceDocumentId() == null || item.getContactMovementId() == null) {
+                throw new BadRequestException("Bu hakediş için cari belge bağlantısı yok. Hakediş belge modeline taşınmadan ödeme yapılamaz.");
+            }
+            Employee employee = employees.get(item.getEmployeeId());
+            if (employee == null || employee.getContactId() == null) {
+                throw new BadRequestException("Bu hakediş için cari belge bağlantısı yok. Hakediş belge modeline taşınmadan ödeme yapılamaz.");
+            }
+
+            FinanceDocumentResponse document = financeService.documentDetail(item.getFinanceDocumentId());
+            if (document.documentType() != FinanceDocumentType.EXPENSE) {
+                throw new BadRequestException("Only EXPENSE documents can be paid");
+            }
+            if (document.status() == FinanceDocumentStatus.VOIDED || document.status() == FinanceDocumentStatus.SETTLED) {
+                throw new BadRequestException("Payment cannot be created for settled or voided documents");
+            }
+            if (!employee.getContactId().equals(document.contactId())) {
+                throw new BadRequestException("Document belongs to another contact");
+            }
+            if (document.remainingAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BadRequestException("Payment cannot be created for settled or voided documents");
+            }
+
+            BigDecimal paymentAmount = document.remainingAmount();
+            ContactMovementResponse movement = contactService.createMovement(employee.getContactId(), new ContactMovementRequest(
+                    request.paymentDate(),
+                    com.dada.eventmanagement.common.enums.ContactMovementType.PAYMENT,
+                    paymentAmount,
+                    null,
+                    request.accountId(),
+                    request.paymentMethodId(),
+                    request.categoryId(),
+                    null,
+                    payout.getEventId(),
+                    item.getFinanceDocumentId(),
+                    null,
+                    servicePayoutPaymentDescription(payout, employee, paymentAmount)
+            ));
+            if (movement.settlementId() == null || movement.financialTransactionId() == null) {
+                throw new BadRequestException("Payment settlement could not be created");
+            }
         }
     }
 
@@ -528,6 +719,7 @@ public class StaffService {
 
     private void apply(Employee employee, EmployeeRequest request) {
         employee.setFullName(request.fullName().trim());
+        employee.setContactId(request.contactId());
         employee.setRoleName(request.roleName());
         employee.setEmployeeType(request.employeeType());
         employee.setDefaultDailyRate(nvl(request.defaultDailyRate()));
@@ -537,15 +729,48 @@ public class StaffService {
     }
 
     private ServicePayoutResponse toResponse(ServicePayout payout) {
-        Map<Long, Employee> employees = employeeRepository.findByCompanyIdAndIsActiveTrueOrderByFullNameAsc(payout.getCompanyId()).stream()
+        List<ServicePayoutItem> rows = itemRepository.findByCompanyIdAndPayoutId(payout.getCompanyId(), payout.getId());
+        Map<Long, Employee> employees = rows.isEmpty()
+                ? Map.of()
+                : employeeRepository.findByCompanyIdAndIdIn(
+                        payout.getCompanyId(),
+                        rows.stream().map(ServicePayoutItem::getEmployeeId).distinct().toList()
+                ).stream()
                 .collect(Collectors.toMap(Employee::getId, Function.identity()));
-        List<ServicePayoutItemResponse> items = itemRepository.findByCompanyIdAndPayoutId(payout.getCompanyId(), payout.getId()).stream()
-                .map(item -> new ServicePayoutItemResponse(
-                        item.getEmployeeId(),
-                        employees.containsKey(item.getEmployeeId()) ? employees.get(item.getEmployeeId()).getFullName() : "-",
-                        item.getPoints(),
-                        item.getPayoutAmount()
-                ))
+        Map<Long, Contact> contacts = contactMap(new ArrayList<>(employees.values()));
+        Map<Long, FinanceDocumentResponse> documents = rows.stream()
+                .map(ServicePayoutItem::getFinanceDocumentId)
+                .filter(id -> id != null)
+                .distinct()
+                .collect(Collectors.toMap(Function.identity(), financeService::documentDetail));
+        List<ServicePayoutItemResponse> items = rows.stream()
+                .map(item -> {
+                    Employee employee = employees.get(item.getEmployeeId());
+                    Contact contact = employee == null || employee.getContactId() == null ? null : contacts.get(employee.getContactId());
+                    FinanceDocumentResponse document = item.getFinanceDocumentId() == null ? null : documents.get(item.getFinanceDocumentId());
+                    FinanceDocumentSettlementResponse latestSettlement = document == null || document.settlements() == null || document.settlements().isEmpty()
+                            ? null
+                            : document.settlements().stream()
+                            .filter(settlement -> settlement.financialTransactionStatus() != com.dada.eventmanagement.common.enums.FinancialTransactionStatus.VOIDED)
+                            .findFirst()
+                            .orElse(null);
+                    return new ServicePayoutItemResponse(
+                            item.getEmployeeId(),
+                            employee == null ? "-" : employee.getFullName(),
+                            item.getPoints(),
+                            item.getPayoutAmount(),
+                            employee == null ? null : employee.getContactId(),
+                            contact == null ? null : contact.getName(),
+                            item.getContactMovementId(),
+                            item.getFinanceDocumentId(),
+                            item.getFinanceDocumentId() != null,
+                            document == null ? null : document.settledAmount(),
+                            document == null ? null : document.remainingAmount(),
+                            document == null || document.status() == null ? null : document.status().name(),
+                            latestSettlement == null ? null : latestSettlement.id(),
+                            latestSettlement == null ? null : latestSettlement.financialTransactionId()
+                    );
+                })
                 .toList();
         return new ServicePayoutResponse(
                 payout.getId(), payout.getPayoutDate(), payout.getEventId(), payout.getPayoutSource(),
@@ -556,8 +781,51 @@ public class StaffService {
         );
     }
 
-    private EmployeeResponse toResponse(Employee employee) {
-        return new EmployeeResponse(employee.getId(), employee.getFullName(), employee.getRoleName(), employee.getEmployeeType(), employee.getDefaultDailyRate(), employee.getServicePoint(), employee.getPhone(), employee.getNotes());
+    private List<EmployeeResponse> mapEmployees(List<Employee> employees) {
+        Map<Long, Contact> contacts = contactMap(employees);
+        return employees.stream()
+                .map(employee -> toResponse(employee, contacts))
+                .toList();
+    }
+
+    private EmployeeResponse toResponse(Employee employee, Map<Long, Contact> contacts) {
+        Contact contact = employee.getContactId() == null ? null : contacts.get(employee.getContactId());
+        return new EmployeeResponse(
+                employee.getId(),
+                employee.getFullName(),
+                employee.getContactId(),
+                contact == null ? null : contact.getName(),
+                employee.getRoleName(),
+                employee.getEmployeeType(),
+                employee.getDefaultDailyRate(),
+                employee.getServicePoint(),
+                employee.getPhone(),
+                employee.getNotes()
+        );
+    }
+
+    private Map<Long, Contact> contactMap(List<Employee> employees) {
+        Long companyId = SecurityUtils.currentCompanyId();
+        List<Long> contactIds = employees.stream()
+                .map(Employee::getContactId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        if (contactIds.isEmpty()) {
+            return Map.of();
+        }
+        return contactRepository.findByCompanyIdAndIdInAndIsActiveTrue(companyId, contactIds).stream()
+                .collect(Collectors.toMap(Contact::getId, Function.identity()));
+    }
+
+    private Long resolveContactId(Long contactId) {
+        if (contactId == null) {
+            return null;
+        }
+        Long companyId = SecurityUtils.currentCompanyId();
+        Contact contact = contactRepository.findByIdAndCompanyIdAndIsActiveTrue(contactId, companyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Contact not found"));
+        return contact.getId();
     }
 
     private BigDecimal nvl(BigDecimal value) {
@@ -637,6 +905,23 @@ public class StaffService {
             return "Servis hakedisi";
         }
         return "Servis hakedisi - " + notes.trim();
+    }
+
+    private String servicePayoutDescription(Event event, Employee employee, ServicePayout payout) {
+        String eventTitle = event.getTitle() == null || event.getTitle().isBlank() ? "Etkinlik" : event.getTitle().trim();
+        String employeeName = employee == null ? "Personel" : employee.getFullName();
+        String notes = payout.getNotes() == null || payout.getNotes().isBlank() ? "" : " - " + payout.getNotes().trim();
+        return eventTitle + " - Servis hakedişi - " + employeeName + notes;
+    }
+
+    private String servicePayoutPaymentDescription(ServicePayout payout, Employee employee, BigDecimal paymentAmount) {
+        String eventPart = payout.getEventId() == null ? "Servis hakedişi" : "Etkinlik #" + payout.getEventId();
+        String employeeName = employee == null ? "Personel" : employee.getFullName();
+        return eventPart + " - ödeme - " + employeeName + " - " + paymentAmount;
+    }
+
+    private String employeeLabel(Employee employee, Long employeeId) {
+        return employee == null ? "Employee #" + employeeId : employee.getFullName();
     }
 
     public record TeamBreakdown(int fixedCount, int extraCount) {

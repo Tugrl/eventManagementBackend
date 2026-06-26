@@ -5,7 +5,9 @@ import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
 import com.dada.eventmanagement.common.util.MathUtils;
 import com.dada.eventmanagement.common.util.SecurityUtils;
+import com.dada.eventmanagement.consumption.repository.EventConsumptionPlanRepository;
 import com.dada.eventmanagement.contact.dto.ContactMovementRequest;
+import com.dada.eventmanagement.contact.dto.ContactMovementResponse;
 import com.dada.eventmanagement.contact.service.ContactService;
 import com.dada.eventmanagement.cost.dto.*;
 import com.dada.eventmanagement.cost.entity.EventCost;
@@ -14,11 +16,10 @@ import com.dada.eventmanagement.cost.repository.EventCostRealizationRepository;
 import com.dada.eventmanagement.cost.repository.EventCostRepository;
 import com.dada.eventmanagement.event.entity.Event;
 import com.dada.eventmanagement.event.service.EventService;
-import com.dada.eventmanagement.consumption.repository.EventConsumptionPlanRepository;
-import com.dada.eventmanagement.inventory.repository.EventInventoryReconciliationRepository;
 import com.dada.eventmanagement.finance.dto.FinancialTransactionRequest;
 import com.dada.eventmanagement.finance.entity.FinancialTransaction;
 import com.dada.eventmanagement.finance.service.FinanceService;
+import com.dada.eventmanagement.inventory.repository.EventInventoryReconciliationRepository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -123,10 +124,18 @@ public class EventCostRealizationService {
                         row.getTransactionDate() == null ? event.getEventDate() : row.getTransactionDate(),
                         ContactMovementType.PAYABLE,
                         row.getActualTotalCost(),
-                        null, null, null, null, null, eventId,
-                        "Etkinlik kapanış borcu - " + row.getName()
+                        null,
+                        null,
+                        null,
+                        row.getFinancialCategoryId(),
+                        null,
+                        eventId,
+                        null,
+                        null,
+                        "Etkinlik kapanis borcu - " + row.getName()
                 ));
                 row.setContactMovementId(movement.id());
+                row.setFinanceDocumentId(movement.documentId());
             }
             row.setFinalized(true);
         }
@@ -147,22 +156,64 @@ public class EventCostRealizationService {
     }
 
     private void postPaidCost(Event event, EventCostRealization row) {
-        if (row.getFinancialTransactionId() != null) return;
-        if (row.getAccountId() == null || row.getFinancialCategoryId() == null || row.getTransactionDate() == null) {
-            throw new BadRequestException("Paid cost requires account, financial category and transaction date: " + row.getName());
+        if (row.getFinancialTransactionId() != null || row.getSettlementId() != null) {
+            return;
         }
-        FinancialTransaction tx = financeService.createTransactionEntity(new FinancialTransactionRequest(
-                event.getId(), row.getAccountId(), row.getPaymentMethodId(), row.getFinancialCategoryId(),
-                null, row.getContactId(), FinancialTransactionType.EXPENSE, row.getTransactionDate(),
-                row.getActualTotalCost(), null, "Etkinlik kapanış gideri - " + row.getName(),
-                OperationSource.EVENT_CLOSING_COST, OperationContext.EVENT, row.getId()
+        if (row.getContactId() == null) {
+            if (row.getAccountId() == null || row.getFinancialCategoryId() == null || row.getTransactionDate() == null) {
+                throw new BadRequestException("Paid cost requires account, financial category and transaction date: " + row.getName());
+            }
+            FinancialTransaction tx = financeService.createTransactionEntity(new FinancialTransactionRequest(
+                    event.getId(), row.getAccountId(), row.getPaymentMethodId(), row.getFinancialCategoryId(),
+                    null, row.getContactId(), FinancialTransactionType.EXPENSE, row.getTransactionDate(),
+                    row.getActualTotalCost(), null, "Etkinlik kapanis gideri - " + row.getName(),
+                    OperationSource.EVENT_CLOSING_COST, OperationContext.EVENT, row.getId()
+            ));
+            row.setFinancialTransactionId(tx.getId());
+            return;
+        }
+        if (row.getFinancialCategoryId() == null || row.getTransactionDate() == null) {
+            throw new BadRequestException("Paid cost requires financial category and transaction date: " + row.getName());
+        }
+        ContactMovementResponse payable = contactService.createMovement(row.getContactId(), new ContactMovementRequest(
+                row.getTransactionDate(),
+                ContactMovementType.PAYABLE,
+                row.getActualTotalCost(),
+                null,
+                null,
+                null,
+                row.getFinancialCategoryId(),
+                null,
+                event.getId(),
+                null,
+                null,
+                "Etkinlik kapanis gideri - " + row.getName()
         ));
-        row.setFinancialTransactionId(tx.getId());
+        ContactMovementResponse payment = contactService.createMovement(row.getContactId(), new ContactMovementRequest(
+                row.getTransactionDate(),
+                ContactMovementType.PAYMENT,
+                row.getActualTotalCost(),
+                null,
+                row.getAccountId(),
+                row.getPaymentMethodId(),
+                row.getFinancialCategoryId(),
+                null,
+                event.getId(),
+                payable.documentId(),
+                null,
+                "Etkinlik kapanis gideri - " + row.getName()
+        ));
+        row.setContactMovementId(payment.id());
+        row.setFinanceDocumentId(payable.documentId());
+        row.setSettlementId(payment.settlementId());
+        row.setFinancialTransactionId(payment.financialTransactionId());
     }
 
     private void initializePlannedCosts(Event event) {
         for (EventCost cost : eventCostRepository.findByCompanyIdAndEventIdOrderByCreatedAtDesc(event.getCompanyId(), event.getId())) {
-            if (repository.findByCompanyIdAndEventIdAndEventCostId(event.getCompanyId(), event.getId(), cost.getId()).isPresent()) continue;
+            if (repository.findByCompanyIdAndEventIdAndEventCostId(event.getCompanyId(), event.getId(), cost.getId()).isPresent()) {
+                continue;
+            }
             EventCostRealization row = new EventCostRealization();
             row.setCompanyId(event.getCompanyId());
             row.setEventId(event.getId());
@@ -195,7 +246,8 @@ public class EventCostRealizationService {
                 row.getActualUnitCost(), row.getActualQuantity(), row.getActualTotalCost(),
                 row.getVerificationStatus(), row.getPaymentStatus(), row.getAccountId(), row.getPaymentMethodId(),
                 row.getFinancialCategoryId(), row.getContactId(), row.getTransactionDate(),
-                row.getFinancialTransactionId(), row.getNotes(), row.getFinalized()
+                row.getFinancialTransactionId(), row.getContactMovementId(), row.getFinanceDocumentId(), row.getSettlementId(),
+                row.getNotes(), row.getFinalized()
         );
     }
 }
