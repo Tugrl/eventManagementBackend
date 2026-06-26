@@ -8,10 +8,13 @@ public record ContactMovementResponse(
         Long id,
         Long contactId,
         Long financialTransactionId,
+        Long documentId,
+        Long settlementId,
         LocalDate movementDate,
         ContactMovementType movementType,
         BigDecimal amount,
         BigDecimal balanceDelta,
+        BigDecimal remainingDocumentAmount,
         String description
 ) {
 }

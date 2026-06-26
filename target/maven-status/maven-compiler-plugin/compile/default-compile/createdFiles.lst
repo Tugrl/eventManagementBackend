@@ -1,6 +1,11 @@
+com\dada\eventmanagement\report\service\EventClosingReportService$RevenueSummary.class
+com\dada\eventmanagement\report\service\EventClosingReportService$ServicePayoutSummary.class
+com\dada\eventmanagement\common\enums\EventRevenueCollectionStatus.class
 com\dada\eventmanagement\staff\repository\EventStaffAssignmentRepository.class
+com\dada\eventmanagement\finance\service\FinanceService$ContactOpenAmounts.class
 com\dada\eventmanagement\cost\service\EventCostRealizationService.class
 com\dada\eventmanagement\staff\dto\EventStaffAssignmentItemRequest.class
+com\dada\eventmanagement\contact\service\ContactService$1.class
 com\dada\eventmanagement\consumption\service\ConsumptionUnitConverter$1.class
 com\dada\eventmanagement\cost\dto\EventCostRealizationRequest.class
 com\dada\eventmanagement\cost\entity\EventCostRealization.class
@@ -13,5 +18,6 @@ com\dada\eventmanagement\staff\dto\EventStaffAssignmentResponse.class
 com\dada\eventmanagement\cost\controller\EventCostRealizationController.class
 com\dada\eventmanagement\common\enums\CostVerificationStatus.class
 com\dada\eventmanagement\staff\entity\EventStaffAssignment.class
+com\dada\eventmanagement\report\service\EventClosingReportService$CostSummary.class
 com\dada\eventmanagement\staff\service\StaffService$TeamBreakdown.class
 com\dada\eventmanagement\staff\dto\EventStaffAssignmentRequest.class

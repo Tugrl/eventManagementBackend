@@ -23,4 +23,8 @@ public class ServicePayoutItem {
     private BigDecimal points = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal payoutAmount = BigDecimal.ZERO;
+    @Column(name = "finance_document_id")
+    private Long financeDocumentId;
+    @Column(name = "contact_movement_id")
+    private Long contactMovementId;
 }

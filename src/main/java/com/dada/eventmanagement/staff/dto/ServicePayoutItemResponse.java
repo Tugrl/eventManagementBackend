@@ -6,6 +6,16 @@ public record ServicePayoutItemResponse(
         Long employeeId,
         String employeeName,
         BigDecimal points,
-        BigDecimal payoutAmount
+        BigDecimal payoutAmount,
+        Long contactId,
+        String contactName,
+        Long contactMovementId,
+        Long financeDocumentId,
+        Boolean documentCreated,
+        BigDecimal paidAmount,
+        BigDecimal remainingAmount,
+        String documentStatus,
+        Long paymentSettlementId,
+        Long paymentTransactionId
 ) {
 }

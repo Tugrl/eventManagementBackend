@@ -1,6 +1,7 @@
 package com.dada.eventmanagement.event.dto;
 
 import com.dada.eventmanagement.common.enums.EventRevenueType;
+import com.dada.eventmanagement.common.enums.EventRevenueCollectionStatus;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
@@ -16,6 +17,8 @@ public record EventRevenueRequest(
         Long revenueChannelId,
         Long contactId,
         Integer guestCount,
-        String description
+        String description,
+        EventRevenueCollectionStatus collectionStatus,
+        BigDecimal collectedAmount
 ) {
 }

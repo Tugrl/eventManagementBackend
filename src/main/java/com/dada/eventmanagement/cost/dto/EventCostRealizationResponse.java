@@ -27,6 +27,9 @@ public record EventCostRealizationResponse(
         Long contactId,
         LocalDate transactionDate,
         Long financialTransactionId,
+        Long contactMovementId,
+        Long financeDocumentId,
+        Long settlementId,
         String notes,
         Boolean finalized
 ) {

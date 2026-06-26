@@ -6,6 +6,8 @@ import java.math.BigDecimal;
 public record EmployeeResponse(
         Long id,
         String fullName,
+        Long contactId,
+        String contactName,
         String roleName,
         EmployeeType employeeType,
         BigDecimal defaultDailyRate,

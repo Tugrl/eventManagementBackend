@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 
 public record EmployeeRequest(
         @NotBlank(message = "Employee name is required") String fullName,
+        Long contactId,
         String roleName,
         @NotNull(message = "Employee type is required") EmployeeType employeeType,
         BigDecimal defaultDailyRate,

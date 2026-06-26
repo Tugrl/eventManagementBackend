@@ -16,6 +16,8 @@ public record ContactMovementRequest(
         Long categoryId,
         Long revenueChannelId,
         Long eventId,
+        Long documentId,
+        LocalDate dueDate,
         String description
 ) {
 }

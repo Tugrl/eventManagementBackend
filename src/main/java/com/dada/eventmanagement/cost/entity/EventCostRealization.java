@@ -53,6 +53,8 @@ public class EventCostRealization {
     private LocalDate transactionDate;
     private Long financialTransactionId;
     private Long contactMovementId;
+    private Long financeDocumentId;
+    private Long settlementId;
     @Column(columnDefinition = "TEXT")
     private String notes;
     @Column(nullable = false)

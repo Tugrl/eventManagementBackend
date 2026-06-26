@@ -3,11 +3,16 @@ package com.dada.eventmanagement.finance.service;
 import com.dada.eventmanagement.common.enums.*;
 import com.dada.eventmanagement.common.exception.BadRequestException;
 import com.dada.eventmanagement.common.exception.ResourceNotFoundException;
+import com.dada.eventmanagement.common.util.MathUtils;
 import com.dada.eventmanagement.common.util.SecurityUtils;
 import com.dada.eventmanagement.contact.entity.Contact;
 import com.dada.eventmanagement.contact.repository.ContactRepository;
 import com.dada.eventmanagement.event.entity.Event;
 import com.dada.eventmanagement.event.repository.EventRepository;
+import com.dada.eventmanagement.reservation.entity.Reservation;
+import com.dada.eventmanagement.reservation.repository.ReservationRepository;
+import com.dada.eventmanagement.report.entity.EventClosingReport;
+import com.dada.eventmanagement.report.repository.EventClosingReportRepository;
 import com.dada.eventmanagement.finance.dto.*;
 import com.dada.eventmanagement.finance.entity.*;
 import com.dada.eventmanagement.finance.entity.PaymentMethod;
@@ -34,6 +39,8 @@ public class FinanceService {
     private final DailyCashReportRepository dailyCashReportRepository;
     private final EventRepository eventRepository;
     private final ContactRepository contactRepository;
+    private final ReservationRepository reservationRepository;
+    private final EventClosingReportRepository eventClosingReportRepository;
     private final FinanceDocumentRepository financeDocumentRepository;
     private final FinanceDocumentSettlementRepository financeDocumentSettlementRepository;
 
@@ -46,6 +53,8 @@ public class FinanceService {
             DailyCashReportRepository dailyCashReportRepository,
             EventRepository eventRepository,
             ContactRepository contactRepository,
+            ReservationRepository reservationRepository,
+            EventClosingReportRepository eventClosingReportRepository,
             FinanceDocumentRepository financeDocumentRepository,
             FinanceDocumentSettlementRepository financeDocumentSettlementRepository
     ) {
@@ -57,6 +66,8 @@ public class FinanceService {
         this.dailyCashReportRepository = dailyCashReportRepository;
         this.eventRepository = eventRepository;
         this.contactRepository = contactRepository;
+        this.reservationRepository = reservationRepository;
+        this.eventClosingReportRepository = eventClosingReportRepository;
         this.financeDocumentRepository = financeDocumentRepository;
         this.financeDocumentSettlementRepository = financeDocumentSettlementRepository;
     }
@@ -242,29 +253,34 @@ public class FinanceService {
         return mapDocuments(List.of(document)).get(0);
     }
 
+    public List<FinanceDocumentResponse> contactDocuments(
+            Long contactId,
+            FinanceDocumentType documentType,
+            FinanceDocumentStatus status,
+            LocalDate startDate,
+            LocalDate endDate
+    ) {
+        Long companyId = SecurityUtils.currentCompanyId();
+        contactRepository.findByIdAndCompanyIdAndIsActiveTrue(contactId, companyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Contact not found"));
+        return documents(documentType, status, null, contactId, startDate, endDate);
+    }
+
     @Transactional
     public FinanceDocumentResponse createDocument(FinanceDocumentRequest request) {
         Long companyId = SecurityUtils.currentCompanyId();
-        FinancialCategory category = validateDocumentCategory(companyId, request.categoryId(), request.documentType());
-        Contact contact = request.contactId() == null ? null : contactRepository.findByIdAndCompanyIdAndIsActiveTrue(request.contactId(), companyId)
-                .orElseThrow(() -> new ResourceNotFoundException("Contact not found"));
-        Event event = request.eventId() == null ? null : eventRepository.findByIdAndCompanyIdAndIsDeletedFalse(request.eventId(), companyId)
-                .orElseThrow(() -> new ResourceNotFoundException("Event not found"));
-        FinanceDocument document = new FinanceDocument();
-        document.setCompanyId(companyId);
-        document.setDocumentType(request.documentType());
-        document.setDocumentScope(FinancialScope.COMPANY);
-        document.setCategoryId(category.getId());
-        document.setContactId(contact == null ? null : contact.getId());
-        document.setEventId(event == null ? null : event.getId());
-        document.setIssueDate(request.issueDate());
-        document.setDueDate(request.dueDate());
-        document.setAmount(request.amount());
-        document.setDescription(blankToNull(request.description()));
-        document.setStatus(FinanceDocumentStatus.OPEN);
-        document.setOperationGroup(category.getOperationGroup());
-        document.setOperationContext(OperationContext.COMPANY);
-        document.setCreatedByUserId(SecurityUtils.currentUser().getId());
+        FinanceDocument document = buildDocument(
+                companyId,
+                request.documentType(),
+                request.categoryId(),
+                request.contactId(),
+                request.eventId(),
+                request.issueDate(),
+                request.dueDate(),
+                request.amount(),
+                request.description(),
+                OperationContext.COMPANY
+        );
         return mapDocuments(List.of(financeDocumentRepository.save(document))).get(0);
     }
 
@@ -313,50 +329,164 @@ public class FinanceService {
     public FinanceDocumentSettlementResponse createDocumentSettlement(Long id, FinanceDocumentSettlementRequest request) {
         Long companyId = SecurityUtils.currentCompanyId();
         FinanceDocument document = findDocument(id, companyId);
-        if (document.getStatus() == FinanceDocumentStatus.VOIDED) {
-            throw new BadRequestException("Voided document cannot accept settlements");
-        }
-        if (document.getStatus() == FinanceDocumentStatus.SETTLED) {
-            throw new BadRequestException("Document is already settled");
-        }
-        BigDecimal settledAmount = activeSettledAmount(companyId, List.of(document)).get(document.getId());
-        BigDecimal remaining = document.getAmount().subtract(settledAmount);
-        if (request.amount().compareTo(remaining) > 0) {
-            throw new BadRequestException("Settlement amount cannot exceed remaining amount");
-        }
+        FinanceDocumentSettlement saved = createSettlement(document, request, null);
+        FinancialTransactionStatus status = saved.getFinancialTransactionId() == null
+                ? FinancialTransactionStatus.ACTIVE
+                : findTransaction(saved.getFinancialTransactionId(), companyId).getStatus();
+        return toResponse(saved, status);
+    }
 
-        FinanceDocumentSettlement settlement = new FinanceDocumentSettlement();
-        settlement.setCompanyId(companyId);
-        settlement.setDocumentId(document.getId());
-        settlement.setSettlementDate(request.settlementDate());
-        settlement.setAmount(request.amount());
-        settlement.setAccountId(resolveAccountId(companyId, request.accountId(), document.getDocumentType().transactionType()));
-        settlement.setPaymentMethodId(resolvePaymentMethodId(companyId, request.paymentMethodId()));
-        settlement.setNotes(blankToNull(request.notes()));
-        settlement.setCreatedByUserId(SecurityUtils.currentUser().getId());
-        settlement = financeDocumentSettlementRepository.save(settlement);
-
-        FinancialTransaction tx = createTransactionEntity(new FinancialTransactionRequest(
-                document.getEventId(),
-                settlement.getAccountId(),
-                settlement.getPaymentMethodId(),
-                document.getCategoryId(),
-                null,
-                document.getContactId(),
-                document.getDocumentType().transactionType(),
-                request.settlementDate(),
-                request.amount(),
-                null,
-                documentSettlementDescription(document, settlement),
-                OperationSource.FINANCE_DOCUMENT_SETTLEMENT,
-                document.getOperationContext(),
-                settlement.getId()
+    public Map<Long, ContactOpenAmounts> contactOpenAmounts(List<Long> contactIds) {
+        Long companyId = SecurityUtils.currentCompanyId();
+        if (contactIds == null || contactIds.isEmpty()) {
+            return Map.of();
+        }
+        List<FinanceDocument> documents = financeDocumentRepository.findByCompanyIdAndContactIdInAndStatusNot(
+                companyId,
+                contactIds,
+                FinanceDocumentStatus.VOIDED
+        );
+        Map<Long, BigDecimal> settledAmounts = activeSettledAmount(companyId, documents);
+        Map<Long, BigDecimal> receivableTotals = contactIds.stream()
+                .collect(Collectors.toMap(Function.identity(), id -> BigDecimal.ZERO));
+        Map<Long, BigDecimal> payableTotals = contactIds.stream()
+                .collect(Collectors.toMap(Function.identity(), id -> BigDecimal.ZERO));
+        for (FinanceDocument document : documents) {
+            if (document.getContactId() == null) {
+                continue;
+            }
+            BigDecimal remaining = document.getAmount().subtract(settledAmounts.getOrDefault(document.getId(), BigDecimal.ZERO));
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            if (document.getDocumentType() == FinanceDocumentType.INCOME) {
+                receivableTotals.put(document.getContactId(), receivableTotals.getOrDefault(document.getContactId(), BigDecimal.ZERO).add(remaining));
+            } else {
+                payableTotals.put(document.getContactId(), payableTotals.getOrDefault(document.getContactId(), BigDecimal.ZERO).add(remaining));
+            }
+        }
+        return contactIds.stream().collect(Collectors.toMap(
+                Function.identity(),
+                id -> new ContactOpenAmounts(
+                        receivableTotals.getOrDefault(id, BigDecimal.ZERO),
+                        payableTotals.getOrDefault(id, BigDecimal.ZERO)
+                )
         ));
-        settlement.setFinancialTransactionId(tx.getId());
-        FinanceDocumentSettlement saved = financeDocumentSettlementRepository.save(settlement);
-        recalculateDocumentStatus(document, settledAmount.add(request.amount()));
+    }
+
+    @Transactional
+    public FinanceDocument createContactDocument(
+            Long contactId,
+            FinanceDocumentType documentType,
+            Long categoryId,
+            Long eventId,
+            LocalDate issueDate,
+            LocalDate dueDate,
+            BigDecimal amount,
+            String description,
+            OperationContext operationContext
+    ) {
+        Long companyId = SecurityUtils.currentCompanyId();
+        contactRepository.findByIdAndCompanyIdAndIsActiveTrue(contactId, companyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Contact not found"));
+        FinanceDocument document = buildDocument(
+                companyId,
+                documentType,
+                categoryId,
+                contactId,
+                eventId,
+                issueDate,
+                dueDate,
+                amount,
+                description,
+                operationContext == null ? OperationContext.CONTACT : operationContext
+        );
+        return financeDocumentRepository.save(document);
+    }
+
+    @Transactional
+    public FinanceDocumentSettlement settleContactDocument(
+            Long contactId,
+            Long documentId,
+            FinanceDocumentType expectedType,
+            FinanceDocumentSettlementRequest request
+    ) {
+        return createSettlement(validateContactDocument(contactId, documentId, expectedType), request, null);
+    }
+
+    @Transactional
+    public FinanceDocumentSettlement attachSettlementToExistingTransaction(
+            Long contactId,
+            Long documentId,
+            FinanceDocumentType expectedType,
+            LocalDate settlementDate,
+            BigDecimal amount,
+            Long accountId,
+            Long paymentMethodId,
+            String notes,
+            Long financialTransactionId
+    ) {
+        FinanceDocument document = validateContactDocument(contactId, documentId, expectedType);
+        if (financialTransactionId == null) {
+            throw new BadRequestException("Financial transaction is required");
+        }
+        FinancialTransaction transaction = findTransaction(financialTransactionId, SecurityUtils.currentCompanyId());
+        if (transaction.getStatus() == FinancialTransactionStatus.VOIDED) {
+            throw new BadRequestException("Voided transaction cannot be attached as settlement");
+        }
+        if (transaction.getTransactionType() != expectedType.transactionType()) {
+            throw new BadRequestException("Transaction type does not match document type");
+        }
+        if (transaction.getAmount().compareTo(amount) != 0) {
+            throw new BadRequestException("Existing transaction amount must match settlement amount");
+        }
+        if (!financeDocumentSettlementRepository.findByCompanyIdAndFinancialTransactionId(SecurityUtils.currentCompanyId(), transaction.getId()).isEmpty()) {
+            throw new BadRequestException("This transaction is already linked to a document settlement");
+        }
+        return createSettlement(
+                document,
+                new FinanceDocumentSettlementRequest(
+                        settlementDate,
+                        amount,
+                        accountId == null ? transaction.getAccountId() : accountId,
+                        paymentMethodId == null ? transaction.getPaymentMethodId() : paymentMethodId,
+                        notes
+                ),
+                transaction
+        );
+    }
+
+    public FinanceDocument findDocumentForContact(Long contactId, Long documentId, FinanceDocumentType expectedType) {
+        return validateContactDocument(contactId, documentId, expectedType);
+    }
+
+    public FinancialTransaction findTransaction(Long id, Long companyId) {
+        return transactionRepository.findByIdAndCompanyId(id, companyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Financial transaction not found"));
+    }
+
+    public BigDecimal remainingDocumentAmount(FinanceDocument document) {
+        BigDecimal settledAmount = activeSettledAmount(document.getCompanyId(), List.of(document)).getOrDefault(document.getId(), BigDecimal.ZERO);
+        return document.getAmount().subtract(settledAmount);
+    }
+
+    public boolean hasActiveSettlements(Long documentId) {
+        FinanceDocument document = findDocument(documentId, SecurityUtils.currentCompanyId());
+        return activeSettledAmount(document.getCompanyId(), List.of(document))
+                .getOrDefault(document.getId(), BigDecimal.ZERO)
+                .compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    @Transactional
+    public void voidDocumentDirect(Long documentId) {
+        FinanceDocument document = findDocument(documentId, SecurityUtils.currentCompanyId());
+        document.setStatus(FinanceDocumentStatus.VOIDED);
         financeDocumentRepository.save(document);
-        return toResponse(saved, tx.getStatus());
+    }
+
+    @Transactional
+    public void recalculateDocumentStatusById(Long documentId) {
+        recalculateDocumentStatus(findDocument(documentId, SecurityUtils.currentCompanyId()));
     }
 
     @Transactional
@@ -500,6 +630,9 @@ public class FinanceService {
         if (tx.getOperationSource() == OperationSource.FINANCE_DOCUMENT_SETTLEMENT && tx.getReferenceId() != null) {
             financeDocumentSettlementRepository.findByIdAndCompanyId(tx.getReferenceId(), companyId)
                     .ifPresent(settlement -> recalculateDocumentStatus(findDocument(settlement.getDocumentId(), companyId)));
+        }
+        for (FinanceDocumentSettlement settlement : financeDocumentSettlementRepository.findByCompanyIdAndFinancialTransactionId(companyId, tx.getId())) {
+            recalculateDocumentStatus(findDocument(settlement.getDocumentId(), companyId));
         }
     }
 
@@ -666,24 +799,74 @@ public class FinanceService {
     public List<EventProfitReportRowResponse> eventProfitReport(LocalDate startDate, LocalDate endDate) {
         Long companyId = SecurityUtils.currentCompanyId();
         DateRange range = normalizeRange(startDate, endDate);
-        Map<Long, com.dada.eventmanagement.event.entity.Event> eventMap = eventRepository
-                .findByCompanyIdAndIsDeletedFalseOrderByEventDateAsc(companyId)
-                .stream()
-                .collect(Collectors.toMap(com.dada.eventmanagement.event.entity.Event::getId, Function.identity()));
+        List<Event> events = eventRepository.findByCompanyIdAndEventDateBetweenAndIsDeletedFalseOrderByEventDateAsc(
+                companyId,
+                range.start(),
+                range.end()
+        );
+        if (events.isEmpty()) {
+            return List.of();
+        }
+
+        List<Long> eventIds = events.stream().map(Event::getId).toList();
+        Map<Long, Event> eventMap = events.stream()
+                .collect(Collectors.toMap(Event::getId, Function.identity()));
         Map<Long, List<FinancialTransaction>> grouped = activeTransactions(companyId, range).stream()
-                .filter(row -> row.getEventId() != null)
+                .filter(row -> row.getEventId() != null && eventMap.containsKey(row.getEventId()))
                 .collect(Collectors.groupingBy(FinancialTransaction::getEventId));
+        Map<Long, List<Reservation>> reservationsByEvent = reservationRepository.findByCompanyIdAndEventIdIn(companyId, eventIds).stream()
+                .collect(Collectors.groupingBy(Reservation::getEventId));
+        Map<Long, Boolean> closingReportByEvent = eventClosingReportRepository.findByCompanyIdAndEventIdIn(companyId, eventIds).stream()
+                .collect(Collectors.toMap(EventClosingReport::getEventId, report -> Boolean.TRUE));
 
         List<EventProfitReportRowResponse> rows = new ArrayList<>();
-        grouped.forEach((eventId, transactions) -> {
-            com.dada.eventmanagement.event.entity.Event event = eventMap.get(eventId);
-            if (event == null) {
-                return;
+        for (Event event : events) {
+            List<FinancialTransaction> transactions = grouped.getOrDefault(event.getId(), List.of());
+            List<Reservation> reservations = reservationsByEvent.getOrDefault(event.getId(), List.of());
+            int reservationCount = 0;
+            int pendingDepositCount = 0;
+            int actualGuestCount = 0;
+            BigDecimal pendingDepositAmount = BigDecimal.ZERO;
+            BigDecimal minimumDepositAmount = MathUtils.money(event.getMinimumDepositAmount());
+            for (Reservation reservation : reservations) {
+                if (reservation.getReservationStatus() != com.dada.eventmanagement.common.enums.ReservationStatus.ACTIVE
+                        && reservation.getReservationStatus() != com.dada.eventmanagement.common.enums.ReservationStatus.COMPLETED) {
+                    continue;
+                }
+                reservationCount++;
+                actualGuestCount += reservation.getGuestCount();
+                if (reservation.getDepositStatus() != com.dada.eventmanagement.common.enums.DepositStatus.PAID) {
+                    pendingDepositCount++;
+                    BigDecimal paidDeposit = MathUtils.money(reservation.getDepositAmount());
+                    BigDecimal remainingDeposit = minimumDepositAmount.subtract(paidDeposit);
+                    if (remainingDeposit.compareTo(BigDecimal.ZERO) > 0) {
+                        pendingDepositAmount = pendingDepositAmount.add(remainingDeposit);
+                    }
+                }
             }
+
             BigDecimal income = sum(transactions, FinancialTransactionType.INCOME);
             BigDecimal expense = sum(transactions, FinancialTransactionType.EXPENSE);
-            rows.add(new EventProfitReportRowResponse(eventId, event.getTitle(), event.getEventDate(), income, expense, income.subtract(expense)));
-        });
+            rows.add(new EventProfitReportRowResponse(
+                    event.getId(),
+                    event.getTitle(),
+                    event.getEventDate(),
+                    event.getStartTime() == null ? null : event.getStartTime().toString(),
+                    event.getEndTime() == null ? null : event.getEndTime().toString(),
+                    event.getVenueName(),
+                    event.getExpectedGuestCount(),
+                    reservationCount,
+                    pendingDepositCount,
+                    MathUtils.money(pendingDepositAmount),
+                    actualGuestCount,
+                    actualGuestCount,
+                    event.getStatus() == null ? null : event.getStatus().name(),
+                    closingReportByEvent.containsKey(event.getId()) ? "FINALIZED" : null,
+                    income,
+                    expense,
+                    income.subtract(expense)
+            ));
+        }
         rows.sort(Comparator.comparing(EventProfitReportRowResponse::eventDate));
         return rows;
     }
@@ -708,6 +891,114 @@ public class FinanceService {
             throw new BadRequestException("Event-only categories cannot be used for general finance documents");
         }
         return category;
+    }
+
+    private FinanceDocument buildDocument(
+            Long companyId,
+            FinanceDocumentType documentType,
+            Long categoryId,
+            Long contactId,
+            Long eventId,
+            LocalDate issueDate,
+            LocalDate dueDate,
+            BigDecimal amount,
+            String description,
+            OperationContext operationContext
+    ) {
+        FinancialCategory category = validateDocumentCategory(companyId, categoryId, documentType);
+        Contact contact = contactId == null ? null : contactRepository.findByIdAndCompanyIdAndIsActiveTrue(contactId, companyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Contact not found"));
+        Event event = eventId == null ? null : eventRepository.findByIdAndCompanyIdAndIsDeletedFalse(eventId, companyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Event not found"));
+        FinanceDocument document = new FinanceDocument();
+        document.setCompanyId(companyId);
+        document.setDocumentType(documentType);
+        document.setDocumentScope(FinancialScope.COMPANY);
+        document.setCategoryId(category.getId());
+        document.setContactId(contact == null ? null : contact.getId());
+        document.setEventId(event == null ? null : event.getId());
+        document.setIssueDate(issueDate);
+        document.setDueDate(dueDate);
+        document.setAmount(amount);
+        document.setDescription(blankToNull(description));
+        document.setStatus(FinanceDocumentStatus.OPEN);
+        document.setOperationGroup(category.getOperationGroup());
+        document.setOperationContext(operationContext == null ? OperationContext.COMPANY : operationContext);
+        document.setCreatedByUserId(SecurityUtils.currentUser().getId());
+        return document;
+    }
+
+    private FinanceDocument validateContactDocument(Long contactId, Long documentId, FinanceDocumentType expectedType) {
+        Long companyId = SecurityUtils.currentCompanyId();
+        FinanceDocument document = findDocument(documentId, companyId);
+        if (document.getContactId() == null || !document.getContactId().equals(contactId)) {
+            throw new BadRequestException("Document does not belong to the selected contact");
+        }
+        if (document.getDocumentType() != expectedType) {
+            throw new BadRequestException("Document type does not match movement type");
+        }
+        if (document.getStatus() == FinanceDocumentStatus.VOIDED) {
+            throw new BadRequestException("Voided document cannot accept settlements");
+        }
+        if (document.getStatus() == FinanceDocumentStatus.SETTLED) {
+            throw new BadRequestException("Document is already settled");
+        }
+        return document;
+    }
+
+    private FinanceDocumentSettlement createSettlement(
+            FinanceDocument document,
+            FinanceDocumentSettlementRequest request,
+            FinancialTransaction existingTransaction
+    ) {
+        Long companyId = document.getCompanyId();
+        if (document.getStatus() == FinanceDocumentStatus.VOIDED) {
+            throw new BadRequestException("Voided document cannot accept settlements");
+        }
+        if (document.getStatus() == FinanceDocumentStatus.SETTLED) {
+            throw new BadRequestException("Document is already settled");
+        }
+        BigDecimal settledAmount = activeSettledAmount(companyId, List.of(document)).getOrDefault(document.getId(), BigDecimal.ZERO);
+        BigDecimal remaining = document.getAmount().subtract(settledAmount);
+        if (request.amount().compareTo(remaining) > 0) {
+            throw new BadRequestException("Settlement amount cannot exceed remaining amount");
+        }
+
+        FinanceDocumentSettlement settlement = new FinanceDocumentSettlement();
+        settlement.setCompanyId(companyId);
+        settlement.setDocumentId(document.getId());
+        settlement.setSettlementDate(request.settlementDate());
+        settlement.setAmount(request.amount());
+        settlement.setAccountId(resolveAccountId(companyId, request.accountId(), document.getDocumentType().transactionType()));
+        settlement.setPaymentMethodId(resolvePaymentMethodId(companyId, request.paymentMethodId()));
+        settlement.setNotes(blankToNull(request.notes()));
+        settlement.setCreatedByUserId(SecurityUtils.currentUser().getId());
+        settlement = financeDocumentSettlementRepository.save(settlement);
+
+        FinancialTransaction transaction = existingTransaction;
+        if (transaction == null) {
+            transaction = createTransactionEntity(new FinancialTransactionRequest(
+                    document.getEventId(),
+                    settlement.getAccountId(),
+                    settlement.getPaymentMethodId(),
+                    document.getCategoryId(),
+                    null,
+                    document.getContactId(),
+                    document.getDocumentType().transactionType(),
+                    request.settlementDate(),
+                    request.amount(),
+                    null,
+                    documentSettlementDescription(document, settlement),
+                    OperationSource.FINANCE_DOCUMENT_SETTLEMENT,
+                    document.getOperationContext(),
+                    settlement.getId()
+            ));
+        }
+        settlement.setFinancialTransactionId(transaction.getId());
+        FinanceDocumentSettlement saved = financeDocumentSettlementRepository.save(settlement);
+        recalculateDocumentStatus(document, settledAmount.add(request.amount()));
+        financeDocumentRepository.save(document);
+        return saved;
     }
 
     private Map<Long, BigDecimal> activeSettledAmount(Long companyId, List<FinanceDocument> documents) {
@@ -743,9 +1034,10 @@ public class FinanceService {
         if (document.getStatus() == FinanceDocumentStatus.VOIDED) {
             return;
         }
-        if (settledAmount.compareTo(BigDecimal.ZERO) <= 0) {
+        BigDecimal remainingAmount = document.getAmount().subtract(settledAmount);
+        if (remainingAmount.compareTo(document.getAmount()) == 0) {
             document.setStatus(FinanceDocumentStatus.OPEN);
-        } else if (settledAmount.compareTo(document.getAmount()) >= 0) {
+        } else if (remainingAmount.compareTo(BigDecimal.ZERO) == 0) {
             document.setStatus(FinanceDocumentStatus.SETTLED);
         } else {
             document.setStatus(FinanceDocumentStatus.PARTIALLY_SETTLED);
@@ -1076,6 +1368,15 @@ public class FinanceService {
     ) {
     }
 
+    public record ContactOpenAmounts(
+            BigDecimal openReceivableAmount,
+            BigDecimal openPayableAmount
+    ) {
+    }
+
     private record DateRange(LocalDate start, LocalDate end) {
     }
 }
+
+
+
